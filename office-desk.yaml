@@ -1,14 +1,17 @@
 substitutions:
   device_name: Flexispot desk
   name: office-desk-flexispot
-  min_height: "73.5" # cm
-  max_height: "123" # cm
+  unit_of_measurement: "cm" # or "in"
+  min_height: "65.5"
+  max_height: "131"
+  ssid: !secret wifi_ssid
+  wifi_password: !secret wifi_password
+  ap_fallback_password: !secret ap_fallback_password
   tx_pin: D5 # =GPIO14
   rx_pin: D6 # =GPIO12
   screen_pin: D2 # =GPIO4
+  encryption_key: !secret api_encryption_key
 
-# Pull the desk-height component straight from the upstream repo at build time.
-# Pin `@main` to a tag or commit (e.g. @v2) if you want reproducible builds.
 external_components:
   - source: github://iMicknl/LoctekMotion_IoT@main
     components: [loctekmotion_desk_height]
@@ -33,26 +36,25 @@ esphome:
       - delay: 300ms
       - button.press: button_m
 
-
 # Enable logging
 logger:
 
 # Enable Home Assistant API
 api:
   encryption:
-    key: !secret api_encryption_key
+    key: ${encryption_key}
 
 ota:
   platform: esphome
 
 wifi:
-  ssid: !secret wifi_ssid
-  password: !secret wifi_password
+  ssid: ${ssid}
+  password: ${wifi_password}
 
   # Enable fallback hotspot (captive portal) in case wifi connection fails
   ap:
     ssid: ${device_name} Fallback Hotspot
-    password: !secret ap_fallback_password
+    password: ${ap_fallback_password}
 
 captive_portal:
 
@@ -61,6 +63,7 @@ uart:
     baud_rate: 9600
     tx_pin: ${tx_pin}
     rx_pin: ${rx_pin}
+    # debug:
 
 sensor:
   - platform: wifi_signal
@@ -73,13 +76,16 @@ sensor:
   - platform: loctekmotion_desk_height
     id: "desk_height"
     name: Desk height
+    unit_of_measurement: ${unit_of_measurement}
     on_value_range:
     - below: ${min_height}
       then:
         - switch.turn_off: switch_down
+        - button.press: button_wake_screen
     - above: ${max_height}
       then:
         - switch.turn_off: switch_up
+        - button.press: button_wake_screen
     on_value:
       then:
         - cover.template.publish:
@@ -109,6 +115,9 @@ switch:
     uart_id: desk_uart
     send_every: 108ms
     internal: true
+    on_turn_on:
+      - button.press: button_wake_screen
+      - delay: 200ms
 
   - platform: uart
     name: "Down"
@@ -118,6 +127,9 @@ switch:
     uart_id: desk_uart
     send_every: 108ms
     internal: true
+    on_turn_on:
+      - button.press: button_wake_screen
+      - delay: 200ms
 
   - platform: uart
     name: "Alarm off"
@@ -148,6 +160,8 @@ button:
     name: "Preset 1"
     icon: mdi:numeric-1-box
     on_press:
+      - button.press: button_wake_screen
+      - delay: 200ms
       - uart.write:
           id: desk_uart
           data: [0x9b, 0x06, 0x02, 0x04, 0x00, 0xac, 0xa3, 0x9d]
@@ -156,6 +170,8 @@ button:
     name: "Preset 2"
     icon: mdi:numeric-2-box
     on_press:
+      - button.press: button_wake_screen
+      - delay: 200ms
       - uart.write:
           id: desk_uart
           data: [0x9b, 0x06, 0x02, 0x08, 0x00, 0xac, 0xa6, 0x9d]
@@ -164,6 +180,8 @@ button:
     name: "Sit" # Preset 3 on some control panels
     icon: mdi:chair-rolling
     on_press:
+      - button.press: button_wake_screen
+      - delay: 200ms
       - uart.write:
           id: desk_uart
           data: [0x9b, 0x06, 0x02, 0x00, 0x01, 0xac, 0x60, 0x9d]
@@ -172,6 +190,8 @@ button:
     name: "Stand" # Preset 4 on some control panels
     icon: mdi:human-handsup
     on_press:
+      - button.press: button_wake_screen
+      - delay: 200ms
       - uart.write:
           id: desk_uart
           data: [0x9b, 0x06, 0x02, 0x10, 0x00, 0xac, 0xac, 0x9d]
@@ -236,6 +256,7 @@ cover:
     stop_action:
       - switch.turn_off: switch_up
       - switch.turn_off: switch_down
+      - button.press: button_wake_screen
     open_action:
       - switch.turn_off: switch_down
       - switch.turn_on: switch_up
@@ -251,7 +272,7 @@ number:
     min_value: ${min_height}
     max_value: ${max_height}
     icon: "mdi:counter"
-    unit_of_measurement: "cm"
+    unit_of_measurement: ${unit_of_measurement}
     device_class: "distance"
     step: 0.1
     lambda: !lambda |-
