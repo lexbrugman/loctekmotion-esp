@@ -2,7 +2,7 @@
 
 ESPHome firmware for controlling a LoctekMotion / FlexiSpot standing desk over a
 Wemos D1 mini (ESP8266), with a GitHub Actions workflow that compiles the
-firmware on every push and attaches the binaries to tagged releases.
+firmware on every push.
 
 The device config is adapted from
 [`iMicknl/LoctekMotion_IoT`](https://github.com/iMicknl/LoctekMotion_IoT)
@@ -56,19 +56,6 @@ If a secret is missing the build still succeeds using a placeholder value — ha
 for verifying that the config compiles, but the resulting binary won't join your
 Wi-Fi until the secrets are set and the workflow re-run.
 
-### Getting a release binary
-
-Push a version tag and the `release` job attaches the firmware to a GitHub
-Release:
-
-```bash
-git tag v1.0.0
-git push origin v1.0.0
-```
-
-The release will contain `*.factory.bin` (full flash via
-[ESP Web Tools](https://web.esphome.io/)) and `*.ota.bin` (over-the-air update).
-
 ## Build it locally
 
 ```bash
@@ -78,13 +65,3 @@ esphome compile office-desk.yaml
 # flash over USB the first time:
 esphome run office-desk.yaml
 ```
-
-## Notes
-
-- The external component is pinned to `@main`. For reproducible builds, change it
-  in `office-desk.yaml` to a tag or commit hash, e.g.
-  `github://iMicknl/LoctekMotion_IoT@v2`.
-- ESPHome version is pinned to `2026.5.3` (the latest release) in the workflow.
-  Bump it as new ESPHome releases come out.
-- ESP8266 UART is 5 V on the desk side — use a level shifter / voltage divider on
-  RX as described in the upstream README.
