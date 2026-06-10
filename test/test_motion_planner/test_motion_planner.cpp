@@ -19,6 +19,7 @@ constexpr DeskMotionPlanner::Timing kTiming{
     /*target_timeout=*/500,
     /*wake_retry_interval=*/150,
     /*target_deadband=*/0.5f,
+    /*coarse_target_deadband=*/1.0f,
     /*hold_duration=*/320,
     /*seek_settle_delay=*/200,
     /*stable_duration=*/0,  // 0 = stable on the first tick with a height
@@ -489,6 +490,69 @@ void test_seek_learning_is_gated_above_the_fine_resolution_limit() {
   TEST_ASSERT_FLOAT_WITHIN(0.001f, 25.0f, p.learnedState().tap_gain_up);
 }
 
+void test_seek_stop_decision_runs_between_command_frames() {
+  // The reached check must fire on the tick a satisfying height report
+  // arrives, not be held until the next command-frame slot — that delay is a
+  // late stop of up to a full command interval, i.e. a built-in overshoot.
+  Recorder rec;
+  DeskMotionPlanner p(kMin, kMax, kSeekTiming, kTunables, std::ref(rec));
+
+  p.moveToHeight(99.0f, 1000, true, 90.0f);
+  p.tick(1200, true, 94.0f, kFresh);  // frame slot: 94 + 4 < 99 -> keep driving
+  TEST_ASSERT_TRUE(p.moving());       // next frame not due until 1300
+
+  p.tick(1250, true, 95.5f, kFresh);  // mid-interval report: 95.5 + 4 >= 99
+  TEST_ASSERT_FALSE(p.moving());      // stops now, not at the 1300 frame slot
+  TEST_ASSERT_TRUE(p.seeking());      // settling
+}
+
+void test_correction_tap_ends_at_its_computed_duration() {
+  // A tap's end must be honoured to tick resolution, not rounded up to the
+  // next command-frame slot — otherwise actual tap durations quantize to the
+  // frame cadence and the learned quadratic gain is fitted to noise.
+  Recorder rec;
+  DeskMotionPlanner p(kMin, kMax, kSeekTiming, kTunables, std::ref(rec));
+
+  p.moveToHeight(99.0f, 1000, true, 90.0f);
+  p.tick(1300, true, 95.1f, kFresh);  // fallback stop (95.1 + 4 >= 99)
+  p.tick(1500, true, 97.0f, kFresh);  // settle: error 2.0 -> 282 ms tap (ends 1782)
+  TEST_ASSERT_TRUE(p.moving());
+
+  p.tick(1700, true, 97.5f, kFresh);  // tap frame sent; next slot would be 1800
+  TEST_ASSERT_TRUE(p.moving());
+
+  p.tick(1785, true, 97.8f, kFresh);  // past 1782 -> tap ends now, not at 1800
+  TEST_ASSERT_FALSE(p.moving());
+  TEST_ASSERT_TRUE(p.seeking());  // settling after the tap
+
+  p.tick(2000, true, 98.7f, kFresh);  // |98.7 - 99| <= 0.5 -> done
+  TEST_ASSERT_FALSE(p.seeking());
+}
+
+void test_coarse_zone_widens_the_deadband() {
+  // At/above fine_height_limit the display reports whole centimetres, so the
+  // fine deadband (0.5 here) can be unsatisfiable: a target of 110.9 reads as
+  // 110 (diff 0.9) or 111 (diff 0.1... but after a tap lands at 110.6 it reads
+  // 111 only past 110.5) and the planner would ping-pong between the two
+  // readings. The coarse deadband (1.0 here) accepts the nearest reading.
+  Recorder rec;
+  DeskMotionPlanner p(kMin, kMax, kSeekTiming, kTunables, std::ref(rec));
+
+  // Already as close as a whole-cm reading can get: no movement at all.
+  p.moveToHeight(110.9f, 1000, true, 110.0f);
+  TEST_ASSERT_FALSE(p.moving());
+  TEST_ASSERT_TRUE(rec.sent.empty());
+
+  // A seek settling in the coarse zone accepts within the coarse deadband
+  // instead of starting a correction tap.
+  p.moveToHeight(110.9f, 2000, true, 105.0f);
+  TEST_ASSERT_TRUE(p.moving());
+  p.tick(2200, true, 107.0f, kFresh);  // 107 + 4 >= 110.9 -> settling
+  TEST_ASSERT_FALSE(p.moving());
+  p.tick(2400, true, 110.0f, kFresh);  // |110 - 110.9| = 0.9 <= 1.0 -> done
+  TEST_ASSERT_FALSE(p.seeking());
+}
+
 void test_seek_waits_for_height_stability_before_sampling() {
   // Verifies that the settle phase waits until height stops changing for
   // stable_duration ms before firing, rather than sampling a mid-coast reading.
@@ -560,6 +624,9 @@ int main(int, char**) {
   RUN_TEST(test_seek_learns_decel_from_the_observed_coast);
   RUN_TEST(test_seek_learns_terminal_speed_after_a_long_drive);
   RUN_TEST(test_seek_learning_is_gated_above_the_fine_resolution_limit);
+  RUN_TEST(test_seek_stop_decision_runs_between_command_frames);
+  RUN_TEST(test_correction_tap_ends_at_its_computed_duration);
+  RUN_TEST(test_coarse_zone_widens_the_deadband);
   RUN_TEST(test_seek_waits_for_height_stability_before_sampling);
   RUN_TEST(test_set_learned_state_sanitizes_implausible_values);
   return UNITY_END();

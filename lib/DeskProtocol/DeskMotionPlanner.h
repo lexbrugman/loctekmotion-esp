@@ -39,6 +39,8 @@ class DeskMotionPlanner {
     uint32_t target_timeout;        // give up awaiting a height report for moveToHeight
     uint32_t wake_retry_interval;   // re-wake cadence while awaiting that report
     float target_deadband;          // "close enough" to a moveToHeight target
+    float coarse_target_deadband;   // deadband at/above fine_height_limit, where
+                                    // readings are whole centimetres
     uint32_t hold_duration;         // how long to hold a held-style command
     uint32_t seek_settle_delay;     // max wait for stability; fires early once stable
     uint32_t stable_duration;       // height unchanged this long before sampling
@@ -96,6 +98,7 @@ class DeskMotionPlanner {
   enum class Mode { kIdle, kUp, kDown, kHold };
   enum class SeekPhase { kNone, kDriving, kSettling };
 
+  float deadbandAt(float height) const;
   void startMove(Mode mode, uint32_t now);
   void beginSeek(float target_cm, bool up, uint32_t now);
   void beginSettling(float height, uint32_t now);

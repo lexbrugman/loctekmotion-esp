@@ -21,6 +21,7 @@ DeskController::DeskController(uint8_t rx_pin, uint8_t tx_pin, uint8_t screen_pi
                    cfg::kTargetTimeout,
                    cfg::kWakeRetryInterval,
                    cfg::kTargetDeadband,
+                   cfg::kCoarseTargetDeadband,
                    cfg::kChildLockHold,
                    cfg::kSeekSettleDelay,
                    cfg::kStableDuration,

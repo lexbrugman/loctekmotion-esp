@@ -90,6 +90,12 @@ inline constexpr uint32_t kHeightStaleTimeout = 1500;
 inline constexpr uint32_t kTargetTimeout = 8000;   // give up awaiting height
 inline constexpr uint32_t kWakeRetryInterval = 2000;  // re-wake cadence while waiting
 inline constexpr float kTargetDeadband = 0.3f;     // "close enough" to target
+// "Close enough" when the settled reading is in the coarse zone (at/above
+// kFineHeightLimit the display reports whole centimetres). Half the 1 cm
+// resolution is the tightest deadband every target can satisfy there; anything
+// smaller leaves the planner tapping back and forth between the two readings
+// bracketing the target until the attempt cap runs out.
+inline constexpr float kCoarseTargetDeadband = 0.5f;
 // Maximum wait for stability after stopping; fires early once height is stable.
 // Must comfortably exceed the longest real coast (~1.5 s from cruise speed):
 // if this fires mid-coast, the "settled" height truncates every coast

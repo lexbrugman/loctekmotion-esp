@@ -79,6 +79,17 @@ void DeskMotionPlanner::stop() {
   one_shot_.active = false;  // a pending preset must not fire after a STOP
 }
 
+float DeskMotionPlanner::deadbandAt(float height) const {
+  // At/above the fine-resolution limit the display reports whole centimetres,
+  // so a sub-resolution deadband can never be confirmed there: a target
+  // between two readings would tap back and forth between them until the
+  // attempt cap. Half the coarse resolution is the tightest deadband every
+  // target can satisfy.
+  const float fine = timing_.target_deadband;
+  const float coarse = timing_.coarse_target_deadband;
+  return (height >= timing_.fine_height_limit && coarse > fine) ? coarse : fine;
+}
+
 void DeskMotionPlanner::moveToHeight(float target_cm, uint32_t now, bool has_height,
                                      float height) {
   if (target_cm < min_height_) target_cm = min_height_;
@@ -90,9 +101,10 @@ void DeskMotionPlanner::moveToHeight(float target_cm, uint32_t now, bool has_hei
     return;
   }
 
-  if (target_cm > height + timing_.target_deadband) {
+  const float deadband = deadbandAt(height);
+  if (target_cm > height + deadband) {
     beginSeek(target_cm, /*up=*/true, now);
-  } else if (target_cm < height - timing_.target_deadband) {
+  } else if (target_cm < height - deadband) {
     beginSeek(target_cm, /*up=*/false, now);
   } else {
     stop();
@@ -161,8 +173,10 @@ void DeskMotionPlanner::serviceMovement(uint32_t now, bool has_height, float hei
     }
   }
 
-  if (static_cast<int32_t>(now - motor_.next_frame_at) < 0) return;
-
+  // Stop decisions run on every tick; only frame *sending* is gated on the
+  // command cadence below. Gating these checks behind next_frame_at would
+  // delay each stop by up to a full command interval — biasing seeks toward
+  // overshoot and stretching correction taps past their computed duration.
   if (has_height) {
     if (motor_.mode == Mode::kUp && height >= max_height_) { stop(); return; }
     if (motor_.mode == Mode::kDown && height <= min_height_) { stop(); return; }
@@ -199,6 +213,7 @@ void DeskMotionPlanner::serviceMovement(uint32_t now, bool has_height, float hei
     }
   }
 
+  if (static_cast<int32_t>(now - motor_.next_frame_at) < 0) return;
   send_(motor_.mode == Mode::kUp ? desk_cmd::Up : desk_cmd::Down);
   motor_.next_frame_at = now + timing_.command_interval;
 }
@@ -245,7 +260,7 @@ void DeskMotionPlanner::serviceSeekSettling(uint32_t now, bool has_height, float
 
   const float abs_diff = height > seek_.target ? height - seek_.target
                                                 : seek_.target - height;
-  if (abs_diff <= timing_.target_deadband) { stop(); return; }
+  if (abs_diff <= deadbandAt(height)) { stop(); return; }
   if (seek_.correction_attempts >= kMaxCorrectionAttempts) { stop(); return; }
 
   ++seek_.correction_attempts;
