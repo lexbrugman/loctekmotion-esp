@@ -91,10 +91,18 @@ inline constexpr uint32_t kTargetTimeout = 8000;   // give up awaiting height
 inline constexpr uint32_t kWakeRetryInterval = 2000;  // re-wake cadence while waiting
 inline constexpr float kTargetDeadband = 0.3f;     // "close enough" to target
 // Maximum wait for stability after stopping; fires early once height is stable.
-inline constexpr uint32_t kSeekSettleDelay = 500;
+// Must comfortably exceed the longest real coast (~1.5 s from cruise speed):
+// if this fires mid-coast, the "settled" height truncates every coast
+// observation, the learned deceleration converges above its true value, and
+// seeks systematically overshoot instead of creeping up from the undershoot
+// side.
+inline constexpr uint32_t kSeekSettleDelay = 2000;
 // How long height must remain unchanged before the post-drive sample is taken.
 // Ensures we measure the desk's truly final position, not a mid-coast reading.
-inline constexpr uint32_t kStableDuration = 200;
+// At 0.1 cm display resolution, a creep slower than 0.5 cm/s produces steps
+// more than 200 ms apart, so this must be long enough not to mistake the slow
+// tail of a coast for stability; 350 ms tolerates creep down to ~0.3 cm/s.
+inline constexpr uint32_t kStableDuration = 350;
 
 // --- Motion model (learned kinematics; see MotionModel) -----------------------
 // Seeking predicts the coast distance from the live travel speed and a learned
