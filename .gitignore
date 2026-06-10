@@ -1,7 +1,7 @@
-# ESPHome secrets — never commit real credentials
-secrets.yaml
+# PlatformIO
+.pio/
+dist/
 
-# ESPHome build cache / generated output
-.esphome/
+# Build output
 *.bin
-config/.esphome/
+*.elf

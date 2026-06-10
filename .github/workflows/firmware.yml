@@ -1,0 +1,150 @@
+name: Firmware
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Unit tests (host)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install PlatformIO
+        run: pip install --upgrade platformio
+      - name: Run host-side unit tests
+        run: pio test -e native
+
+  build:
+    name: Build firmware (${{ matrix.env }})
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        env: [d1_mini, esp32dev]
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Cache PlatformIO
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.platformio
+            ~/.cache/pip
+          key: pio-${{ runner.os }}-${{ matrix.env }}-${{ hashFiles('platformio.ini') }}
+      - name: Install PlatformIO
+        run: pip install --upgrade platformio
+
+      # The OTA channel tag must match the one "publish" below creates for this
+      # branch, so a binary always tracks the repo and channel it was actually
+      # built from (see kOtaBaseUrl/FW_OTA_REPO/FW_OTA_CHANNEL in config.h).
+      - name: Determine version and OTA channel
+        id: ver
+        run: |
+          echo "version=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          echo "channel=${GITHUB_REF_NAME//\//-}-latest" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        env:
+          PLATFORMIO_BUILD_FLAGS: >-
+            -DFW_VERSION=${{ steps.ver.outputs.version }}
+            -DFW_OTA_REPO=\"${{ github.repository }}\"
+            -DFW_OTA_CHANNEL=\"${{ steps.ver.outputs.channel }}\"
+        run: pio run -e ${{ matrix.env }}
+
+      # The asset name embeds the board (must match cfg::kFirmwareAsset) so a
+      # device only ever fetches the image built for it; version.txt is board-
+      # independent (it's just the commit SHA both boards were built from).
+      - name: Stage release assets
+        run: |
+          mkdir -p dist
+          cp .pio/build/${{ matrix.env }}/firmware.bin dist/firmware-${{ matrix.env }}.bin
+          echo -n "${{ steps.ver.outputs.version }}" > dist/version.txt
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: firmware-${{ matrix.env }}-${{ steps.ver.outputs.version }}
+          path: dist/
+
+  publish:
+    name: Publish rolling release (OTA channel)
+    if: github.event_name == 'push'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Download builds
+        uses: actions/download-artifact@v8
+        with:
+          pattern: firmware-*-${{ needs.build.outputs.version }}
+          path: dist
+          merge-multiple: true
+
+      # Each branch gets its own rolling "<branch>-latest" tag/release that CI
+      # overwrites on every push, with one binary per board attached. Devices
+      # poll a fixed channel URL for their own board's asset, e.g.
+      #   .../releases/download/master-latest/firmware-d1_mini.bin
+      # so OTA always serves the newest build for the branch they track —
+      # production devices follow "master-latest", test devices can be pointed
+      # at a feature branch's "<branch>-latest" channel (see config.h).
+      # Only the default branch's channel gets GitHub's "Latest" badge, so
+      # feature-branch pushes never steal it from the production channel.
+      - name: Publish "<branch>-latest" release
+        run: |
+          tag="${GITHUB_REF_NAME//\//-}-latest"
+          if [ "$GITHUB_REF_NAME" = "${{ github.event.repository.default_branch }}" ]; then
+            latest=true
+          else
+            latest=false
+          fi
+          gh release delete "$tag" --yes --cleanup-tag --repo "$GITHUB_REPOSITORY" || true
+          gh release create "$tag" dist/*.bin dist/version.txt \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "$tag (OTA channel)" \
+            --notes "Rolling OTA channel for branch \`$GITHUB_REF_NAME\` — devices poll this fixed URL; CI overwrites it on every push. Built from ${GITHUB_SHA:0:7} (version ${{ needs.build.outputs.version }})." \
+            --latest=$latest
+
+      # Alongside the rolling channel above (which devices poll and CI
+      # overwrites every push), keep one untouched release per build so past
+      # firmware versions stay browsable/downloadable. Tagged by
+      # branch+timestamp+commit so it never collides with — or gets cleaned
+      # up by — the rolling tag: the commit makes the tag unique, and the
+      # UTC commit-date stamp makes tags sort chronologically (GitHub's
+      # releases page orders by name, which is random for bare short SHAs;
+      # "latest" sorts above any digit, so the rolling channel stays on top
+      # of its branch's archives). cleanup.yml parses this tag format when
+      # pruning a deleted branch's releases — keep the two in sync.
+      # Only the default branch is archived: it's the audit trail of firmware
+      # production devices may have run, while feature-branch builds are
+      # throwaway (their rolling channel above is all a test device needs).
+      # --latest=false keeps GitHub's "Latest" badge on the default branch's
+      # OTA channel rather than letting it jump to whichever release was
+      # created last.
+      - name: Archive this build's release
+        if: github.ref_name == github.event.repository.default_branch
+        run: |
+          stamp="$(TZ=UTC git show -s --format=%cd --date=format-local:%Y%m%d-%H%M%S "$GITHUB_SHA")"
+          tag="${GITHUB_REF_NAME//\//-}-$stamp-${{ needs.build.outputs.version }}"
+          gh release create "$tag" dist/*.bin dist/version.txt \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "$tag (build history)" \
+            --notes "Archived build for branch \`$GITHUB_REF_NAME\` — commit ${GITHUB_SHA:0:7} (version ${{ needs.build.outputs.version }}). Not an OTA channel; devices don't poll this." \
+            --latest=false
