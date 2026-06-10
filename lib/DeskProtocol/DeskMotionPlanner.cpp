@@ -127,6 +127,7 @@ void DeskMotionPlanner::tick(uint32_t now, bool has_height, float height,
   // Feed each newly decoded value to the speed estimator exactly once.
   if (has_height && height != last_fed_height_) {
     last_fed_height_ = height;
+    last_height_change_at_ = now;
     estimator_.addSample(now, height);
   }
 
@@ -198,12 +199,29 @@ void DeskMotionPlanner::serviceMovement(uint32_t now, bool has_height, float hei
           if (speed < 0.0f) speed = -speed;
           measured = true;
         }
+        // Dead-reckon between reports: the display only reports every
+        // ~108 ms, so waiting for the report that confirms the stop point
+        // stops up to a full report late. With a measured speed, advance the
+        // last report by speed·(time since it changed) and stop at the
+        // predicted crossing instead; estimator validity bounds the gap to
+        // speed_max_age. The fallback speed must not extrapolate — an
+        // assumed speed across a stale gap could predict past the true
+        // position, and fallback errors have to stay on the undershoot side.
+        float position = height;
+        if (measured) {
+          const float gap_s =
+              static_cast<float>(now - last_height_change_at_) / 1000.0f;
+          position += (seek_.up ? speed : -speed) * gap_s;
+        }
         const float coast = model_.coastDistance(seek_.up, speed);
         const bool reached = motor_.mode == Mode::kUp
-                                 ? height + coast >= seek_.target
-                                 : height - coast <= seek_.target;
+                                 ? position + coast >= seek_.target
+                                 : position - coast <= seek_.target;
         if (reached) {
-          seek_.stop_height = height;
+          // The coast observation must measure from where the desk actually
+          // was at cut-off, so the learned start point is the dead-reckoned
+          // position, not the stale report.
+          seek_.stop_height = position;
           seek_.stop_speed = speed;
           seek_.stop_speed_measured = measured;
           beginSettling(height, now);

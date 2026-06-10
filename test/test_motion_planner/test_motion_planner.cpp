@@ -529,6 +529,46 @@ void test_correction_tap_ends_at_its_computed_duration() {
   TEST_ASSERT_FALSE(p.seeking());
 }
 
+void test_seek_dead_reckons_between_height_reports() {
+  // The display only reports every ~100 ms; the stop must fire at the
+  // *predicted* crossing between reports, not wait for the report that
+  // confirms it. Learning then measures the coast from the dead-reckoned
+  // cut-off position, not the stale report.
+  Recorder rec;
+  DeskMotionPlanner p(kMin, kMax, kSeekTiming,
+                      withRates(kTunables, 0.0f, /*decel_rate=*/1.0f, 0.0f),
+                      std::ref(rec));
+
+  // Steady measured 3 cm/s climb; reports every 100 ms. The drive starts low
+  // enough that the early fallback-coast phase (estimator not yet valid)
+  // can't trip the stop.
+  p.moveToHeight(98.6f, 1000, true, 90.0f);
+  uint32_t t = 1100;
+  float h = 90.3f;
+  float last_h = h;
+  while (t <= 3000) {
+    p.tick(t, true, h, kFresh);
+    last_h = h;
+    t += 100;
+    h += 0.3f;
+  }
+  // Last report 96.0 at 3000: 96.0 + 2.25 < 98.6 -> still driving.
+  TEST_ASSERT_TRUE(p.moving());
+
+  // No new report, but 150 ms later dead reckoning puts the desk at
+  // 96.0 + 3·0.15 = 96.45: 96.45 + 2.25 >= 98.6 -> stop mid-interval.
+  p.tick(3150, true, last_h, kFresh);
+  TEST_ASSERT_FALSE(p.moving());
+  TEST_ASSERT_TRUE(p.seeking());
+
+  // Settles at 98.2: coast measured from the dead-reckoned 96.45, not the
+  // 96.0 report = 1.75 cm at 3 cm/s -> decel 9/(2·1.75) = 2.57 (rate 1.0
+  // replaces the 2.0 seed outright). |98.2 - 98.6| <= 0.5 -> done.
+  p.tick(3350, true, 98.2f, kFresh);
+  TEST_ASSERT_FALSE(p.seeking());
+  TEST_ASSERT_FLOAT_WITHIN(0.05f, 2.57f, p.learnedState().decel_up);
+}
+
 void test_coarse_zone_widens_the_deadband() {
   // At/above fine_height_limit the display reports whole centimetres, so the
   // fine deadband (0.5 here) can be unsatisfiable: a target of 110.9 reads as
@@ -626,6 +666,7 @@ int main(int, char**) {
   RUN_TEST(test_seek_learning_is_gated_above_the_fine_resolution_limit);
   RUN_TEST(test_seek_stop_decision_runs_between_command_frames);
   RUN_TEST(test_correction_tap_ends_at_its_computed_duration);
+  RUN_TEST(test_seek_dead_reckons_between_height_reports);
   RUN_TEST(test_coarse_zone_widens_the_deadband);
   RUN_TEST(test_seek_waits_for_height_stability_before_sampling);
   RUN_TEST(test_set_learned_state_sanitizes_implausible_values);

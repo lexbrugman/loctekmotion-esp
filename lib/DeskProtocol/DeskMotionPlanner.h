@@ -16,7 +16,9 @@
 // Seeking is physics-based: a VelocityEstimator derives the live travel speed
 // from the height stream, and a learned MotionModel predicts how far the desk
 // will coast once driving stops — the drive ends when the remaining distance
-// drops to the predicted coast. When no clean speed measurement is available
+// drops to the predicted coast. Between height reports the position is
+// dead-reckoned forward at the measured speed, so the stop point isn't
+// quantized to the report cadence. When no clean speed measurement is available
 // (e.g. above the display's fine-resolution range), the learned terminal
 // speed is assumed instead; that overestimates the coast during ramp-up, so
 // errors fall on the undershoot side and the correction tap closes the gap
@@ -118,6 +120,8 @@ class DeskMotionPlanner {
   MotionModel model_;
   VelocityEstimator estimator_;
   float last_fed_height_ = -1.0f;  // dedupe: feed each decoded value once
+  uint32_t last_height_change_at_ = 0;  // when the reported height last changed —
+                                        // dead-reckoning anchor between reports
 
   // Current drive mode and per-move timing counters. Shared by all move types
   // (continuous, seek drive, correction tap, hold).
