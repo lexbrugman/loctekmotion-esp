@@ -79,6 +79,10 @@ void DeskController::loop() {
   const bool seeking = planner_.seeking();
   if (was_seeking_ && !seeking) {
     motion_store::save(planner_.learnedState());
+    // The planner has a report only when the seek genuinely completed —
+    // aborts (STOP, timeouts, travel limits) cross this edge without one.
+    DeskMotionPlanner::SeekReport report;
+    if (seek_cb_ && planner_.takeSeekReport(report)) seek_cb_(report);
   }
   was_seeking_ = seeking;
 }

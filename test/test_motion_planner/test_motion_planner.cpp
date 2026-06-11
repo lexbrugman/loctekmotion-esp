@@ -614,6 +614,48 @@ void test_seek_waits_for_height_stability_before_sampling() {
   TEST_ASSERT_TRUE(p.moving());  // correction tap now running
 }
 
+void test_completed_seek_yields_a_report_once() {
+  Recorder rec;
+  DeskMotionPlanner p(kMin, kMax, kSeekTiming, kTunables, std::ref(rec));
+
+  DeskMotionPlanner::SeekReport r{};
+  TEST_ASSERT_FALSE(p.takeSeekReport(r));  // nothing completed yet
+
+  p.moveToHeight(99.0f, 1000, true, 90.0f);
+  p.tick(1300, true, 95.1f, kFresh);       // fallback stop: predicted coast 4.0
+  TEST_ASSERT_FALSE(p.takeSeekReport(r));  // still settling — not complete
+  p.tick(1500, true, 97.0f, kFresh);       // settle: obs coast 1.9; err 2.0 -> tap
+  p.tick(1800, true, 97.9f, kFresh);       // tap over -> settling again
+  p.tick(2000, true, 98.7f, kFresh);       // |98.7 - 99| <= 0.5 -> complete
+  TEST_ASSERT_FALSE(p.seeking());
+
+  TEST_ASSERT_TRUE(p.takeSeekReport(r));
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, 99.0f, r.target);
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, 90.0f, r.start_height);
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, 95.1f, r.stop_height);
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, 4.0f, r.stop_speed);  // terminal fallback
+  TEST_ASSERT_FALSE(r.stop_speed_measured);
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, 4.0f, r.predicted_coast);
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, 1.9f, r.observed_coast);
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, 98.7f, r.settled_height);
+  TEST_ASSERT_EQUAL(1, r.correction_taps);
+  TEST_ASSERT_EQUAL(1000, r.duration_ms);
+
+  TEST_ASSERT_FALSE(p.takeSeekReport(r));  // one-shot: consumed above
+}
+
+void test_aborted_seek_yields_no_report() {
+  Recorder rec;
+  DeskMotionPlanner p(kMin, kMax, kSeekTiming, kTunables, std::ref(rec));
+
+  p.moveToHeight(99.0f, 1000, true, 90.0f);
+  p.tick(1200, true, 91.0f, kFresh);  // driving
+  p.stop();                           // user STOP mid-seek
+
+  DeskMotionPlanner::SeekReport r{};
+  TEST_ASSERT_FALSE(p.takeSeekReport(r));
+}
+
 void test_set_learned_state_sanitizes_implausible_values() {
   Recorder rec;
   DeskMotionPlanner p(kMin, kMax, kSeekTiming, kTunables, std::ref(rec));
@@ -669,6 +711,8 @@ int main(int, char**) {
   RUN_TEST(test_seek_dead_reckons_between_height_reports);
   RUN_TEST(test_coarse_zone_widens_the_deadband);
   RUN_TEST(test_seek_waits_for_height_stability_before_sampling);
+  RUN_TEST(test_completed_seek_yields_a_report_once);
+  RUN_TEST(test_aborted_seek_yields_no_report);
   RUN_TEST(test_set_learned_state_sanitizes_implausible_values);
   return UNITY_END();
 }

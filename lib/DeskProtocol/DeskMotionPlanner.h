@@ -60,6 +60,22 @@ class DeskMotionPlanner {
   // cycles (see MotionStore).
   using LearnedState = MotionModel::State;
 
+  // Summary of a *completed* seek — settled within the deadband or exhausted
+  // its correction attempts — for telemetry. Aborted seeks (STOP, timeouts,
+  // travel limits) produce none.
+  struct SeekReport {
+    float target = 0.0f;
+    float start_height = 0.0f;  // height when the seek began
+    float stop_height = 0.0f;   // (dead-reckoned) position at drive cut-off
+    float stop_speed = 0.0f;    // speed the coast prediction used (cm/s)
+    bool stop_speed_measured = false;  // false -> terminal-speed fallback
+    float predicted_coast = 0.0f;      // coast expected at cut-off (cm)
+    float observed_coast = 0.0f;       // movement seen by the first settle (cm)
+    float settled_height = 0.0f;       // final position
+    uint32_t correction_taps = 0;
+    uint32_t duration_ms = 0;  // drive start -> completion
+  };
+
   DeskMotionPlanner(float min_height, float max_height, Timing timing,
                     MotionModel::Tunables tunables, SendFn send);
 
@@ -75,6 +91,11 @@ class DeskMotionPlanner {
   // True while a seek (including post-drive settling and correction taps) is
   // in progress — use this to detect when a seek fully completes.
   bool seeking() const { return seek_.active; }
+
+  // Fetch the report for the most recently completed seek. Returns each
+  // report at most once (one-shot), false when nothing completed since the
+  // last call.
+  bool takeSeekReport(SeekReport& out);
 
   // --- One-shot command (wake, settle, then send once) ---
   void issue(const desk_cmd::Frame& frame, uint32_t now);
@@ -102,7 +123,7 @@ class DeskMotionPlanner {
 
   float deadbandAt(float height) const;
   void startMove(Mode mode, uint32_t now);
-  void beginSeek(float target_cm, bool up, uint32_t now);
+  void beginSeek(float target_cm, bool up, uint32_t now, float height);
   void beginSettling(float height, uint32_t now);
   void beginCorrectionDrive(bool up, uint32_t duration, float start_height, uint32_t now);
   void servicePending(uint32_t now, bool has_height, float height);
@@ -147,7 +168,15 @@ class DeskMotionPlanner {
     float stop_height = 0.0f;
     float stop_speed = 0.0f;
     bool stop_speed_measured = false;
+    // Telemetry breadcrumbs for the SeekReport.
+    float start_height = 0.0f;
+    float predicted_coast = 0.0f;
+    float observed_coast = 0.0f;
   } seek_;
+
+  // Most recently completed seek; report_ready_ makes takeSeekReport one-shot.
+  SeekReport report_{};
+  bool report_ready_ = false;
 
   // Post-drive settling: active while seek_.phase == kSettling.
   struct Settle {

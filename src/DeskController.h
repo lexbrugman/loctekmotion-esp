@@ -19,6 +19,8 @@
 class DeskController {
  public:
   using HeightCallback = std::function<void(float height)>;
+  using SeekReport = DeskMotionPlanner::SeekReport;
+  using SeekCallback = std::function<void(const SeekReport&)>;
 
   DeskController(uint8_t rx_pin, uint8_t tx_pin, uint8_t screen_pin, uint32_t baud,
                  float min_height, float max_height);
@@ -28,6 +30,14 @@ class DeskController {
 
   // Register a callback fired whenever a fresh height value is decoded.
   void onHeight(HeightCallback cb) { height_cb_ = std::move(cb); }
+
+  // Register a callback fired once per *completed* seek (see SeekReport);
+  // aborted seeks don't fire it. Runs from loop() after the learned state has
+  // been persisted, so learnedState() already reflects the seek's updates.
+  void onSeekDone(SeekCallback cb) { seek_cb_ = std::move(cb); }
+
+  // Current learned motion calibration, for telemetry.
+  DeskMotionPlanner::LearnedState learnedState() const { return planner_.learnedState(); }
 
   bool has_height() const { return decoder_.has_height(); }
   float height() const { return decoder_.height(); }
@@ -78,6 +88,7 @@ class DeskController {
 
   DeskHeightDecoder decoder_;
   HeightCallback height_cb_;
+  SeekCallback seek_cb_;
   uint32_t last_height_at_ = 0;
   DeskMotionPlanner planner_;
   bool was_seeking_ = false;

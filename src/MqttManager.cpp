@@ -46,6 +46,7 @@ void MqttManager::begin(const DeviceConfig& config, CommandHandler handler) {
   ota_channel_top_ = base_ + "/ota_channel";
   childlock_top_ = base_ + "/childlock";
   movement_avail_top_ = base_ + "/movement_available";
+  calibration_top_ = base_ + "/calibration";
 
   mqtt_.setServer(config_.mqtt_host, config_.mqtt_port);
   mqtt_.setBufferSize(1024);  // discovery payloads exceed the 256 default
@@ -112,6 +113,29 @@ void MqttManager::announce() {
   // Constant for the life of the build, so publish it once here rather than
   // from main.cpp's periodic telemetry loop (retained, like availability).
   mqtt_.publish(ota_channel_top_.c_str(), cfg::kOtaChannel, true);
+
+  // --- Motion calibration (learned kinematics; see MotionModel) ---
+  // Six diagnostic sensors fed from one retained JSON topic, for watching the
+  // per-desk calibration converge. Off by default in HA — opt-in via the
+  // entity registry, since they're debugging aids rather than daily-use state.
+  struct Cal { const char* key; const char* name; const char* unit; };
+  static const Cal cal_sensors[] = {
+      {"terminal_speed_up", "Cruise speed up", "cm/s"},
+      {"terminal_speed_down", "Cruise speed down", "cm/s"},
+      {"decel_up", "Coast deceleration up", "cm/s²"},
+      {"decel_down", "Coast deceleration down", "cm/s²"},
+      {"tap_gain_up", "Tap gain up", "cm/s²"},
+      {"tap_gain_down", "Tap gain down", "cm/s²"},
+  };
+  for (const auto& c : cal_sensors) {
+    publishDiscoveryEntity(
+        "sensor", c.key, c.name,
+        "\"state_topic\":\"" + calibration_top_ + "\",\"value_template\":\"{{ value_json." +
+            c.key + " }}\",\"unit_of_measurement\":\"" + c.unit +
+            "\",\"state_class\":\"measurement\",\"suggested_display_precision\":2,"
+            "\"entity_category\":\"diagnostic\",\"enabled_by_default\":false,"
+            "\"icon\":\"mdi:tune-variant\"");
+  }
 
   // --- Cover (position-based) ---
   // Gated on movement_avail_top_: the desk ignores movement commands while
@@ -261,4 +285,23 @@ void MqttManager::publishChildLock(bool locked) {
 void MqttManager::publishMovementAvailable(bool available) {
   if (mqtt_.connected())
     mqtt_.publish(movement_avail_top_.c_str(), available ? "online" : "offline", true);
+}
+void MqttManager::publishCalibration(const MotionModel::State& s) {
+  if (!mqtt_.connected()) return;
+  String p;
+  p.reserve(192);
+  p += "{\"terminal_speed_up\":";
+  p += String(s.terminal_speed_up, 3);
+  p += ",\"terminal_speed_down\":";
+  p += String(s.terminal_speed_down, 3);
+  p += ",\"decel_up\":";
+  p += String(s.decel_up, 3);
+  p += ",\"decel_down\":";
+  p += String(s.decel_down, 3);
+  p += ",\"tap_gain_up\":";
+  p += String(s.tap_gain_up, 3);
+  p += ",\"tap_gain_down\":";
+  p += String(s.tap_gain_down, 3);
+  p += "}";
+  mqtt_.publish(calibration_top_.c_str(), p.c_str(), true);
 }

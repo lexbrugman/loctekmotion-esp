@@ -28,7 +28,7 @@ void DeskMotionPlanner::startMove(Mode mode, uint32_t now) {
   send_(desk_cmd::Wake);
 }
 
-void DeskMotionPlanner::beginSeek(float target_cm, bool up, uint32_t now) {
+void DeskMotionPlanner::beginSeek(float target_cm, bool up, uint32_t now, float height) {
   estimator_.reset();  // stale samples from a previous move must not leak in
   seek_ = {};
   seek_.active = true;
@@ -36,7 +36,15 @@ void DeskMotionPlanner::beginSeek(float target_cm, bool up, uint32_t now) {
   seek_.phase = SeekPhase::kDriving;
   seek_.up = up;
   seek_.drive_started_at = now;
+  seek_.start_height = height;
   startMove(up ? Mode::kUp : Mode::kDown, now);
+}
+
+bool DeskMotionPlanner::takeSeekReport(SeekReport& out) {
+  if (!report_ready_) return false;
+  report_ready_ = false;
+  out = report_;
+  return true;
 }
 
 void DeskMotionPlanner::beginSettling(float height, uint32_t now) {
@@ -103,9 +111,9 @@ void DeskMotionPlanner::moveToHeight(float target_cm, uint32_t now, bool has_hei
 
   const float deadband = deadbandAt(height);
   if (target_cm > height + deadband) {
-    beginSeek(target_cm, /*up=*/true, now);
+    beginSeek(target_cm, /*up=*/true, now, height);
   } else if (target_cm < height - deadband) {
-    beginSeek(target_cm, /*up=*/false, now);
+    beginSeek(target_cm, /*up=*/false, now, height);
   } else {
     stop();
   }
@@ -224,6 +232,7 @@ void DeskMotionPlanner::serviceMovement(uint32_t now, bool has_height, float hei
           seek_.stop_height = position;
           seek_.stop_speed = speed;
           seek_.stop_speed_measured = measured;
+          seek_.predicted_coast = coast;
           beginSettling(height, now);
           return;
         }
@@ -253,10 +262,11 @@ void DeskMotionPlanner::serviceSeekSettling(uint32_t now, bool has_height, float
   // modeled inputs would feed the learning its own assumptions back.
   const bool settled_fine = height < timing_.fine_height_limit;
   if (seek_.correction_attempts == 0) {
+    const float coast = seek_.up ? height - seek_.stop_height
+                                 : seek_.stop_height - height;
+    seek_.observed_coast = coast;  // telemetry, regardless of learning gates
     const bool stop_fine = seek_.stop_height < timing_.fine_height_limit;
     if (seek_.stop_speed_measured && settled_fine && stop_fine) {
-      const float coast = seek_.up ? height - seek_.stop_height
-                                   : seek_.stop_height - height;
       if (coast > kMinLearnableMove) {
         model_.learnCoast(seek_.up, seek_.stop_speed, coast);
       }
@@ -278,8 +288,17 @@ void DeskMotionPlanner::serviceSeekSettling(uint32_t now, bool has_height, float
 
   const float abs_diff = height > seek_.target ? height - seek_.target
                                                 : seek_.target - height;
-  if (abs_diff <= deadbandAt(height)) { stop(); return; }
-  if (seek_.correction_attempts >= kMaxCorrectionAttempts) { stop(); return; }
+  if (abs_diff <= deadbandAt(height) ||
+      seek_.correction_attempts >= kMaxCorrectionAttempts) {
+    report_ = {seek_.target,         seek_.start_height,
+               seek_.stop_height,    seek_.stop_speed,
+               seek_.stop_speed_measured, seek_.predicted_coast,
+               seek_.observed_coast, height,
+               seek_.correction_attempts, now - seek_.drive_started_at};
+    report_ready_ = true;
+    stop();
+    return;
+  }
 
   ++seek_.correction_attempts;
   const bool tap_up = height < seek_.target;

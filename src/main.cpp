@@ -73,6 +73,47 @@ void closeDoubleResetWindow(uint32_t now) {
   }
 }
 
+// Learned motion calibration (retained JSON; see MqttManager's calibration
+// sensors). Values only change when a seek completes or calibration is reset,
+// so publish on those events plus once per broker connection — the flag goes
+// back to pending on each, and the loop retries until a publish succeeds.
+bool calibration_pending = true;
+
+void publishCalibrationState() {
+  if (!calibration_pending || !mqtt.connected()) return;
+  calibration_pending = false;
+  mqtt.publishCalibration(desk.learnedState());
+}
+
+// One-line summary per completed seek: how the coast prediction compared to
+// reality and what the corrections had to clean up — the ground truth for
+// judging the motion model's convergence from the HA log.
+void publishSeekReport(const DeskController::SeekReport& r) {
+  String m;
+  m.reserve(160);
+  m += "seek ";
+  m += String(r.start_height, 1);
+  m += "->";
+  m += String(r.target, 1);
+  m += ": settled ";
+  m += String(r.settled_height, 1);
+  m += " (err ";
+  m += String(r.settled_height - r.target, 2);
+  m += "), coast pred ";
+  m += String(r.predicted_coast, 2);
+  m += " obs ";
+  m += String(r.observed_coast, 2);
+  m += " @ ";
+  m += String(r.stop_speed, 2);
+  m += r.stop_speed_measured ? " cm/s measured, taps " : " cm/s assumed, taps ";
+  m += String(r.correction_taps);
+  m += ", ";
+  m += String(static_cast<float>(r.duration_ms) / 1000.0f, 1);
+  m += "s";
+  mqtt.publishLog(m);
+  calibration_pending = true;  // the seek's learning updates just landed
+}
+
 // The desk streams its display ~9x/s while moving, mostly repeating the same
 // value — republish (retained) only when it actually changes.
 float last_published_height = -1.0f;
@@ -303,6 +344,7 @@ void setup() {
 
   desk.begin();
   desk.onHeight(publishHeightState);
+  desk.onSeekDone(publishSeekReport);
 
   mqtt.begin(config, handleCommand);
   updater.begin(cfg::kSwVersion, [](const String& m) {
@@ -322,6 +364,7 @@ void loop() {
 
   publishChildLockState();
   publishMovementAvailability();
+  publishCalibrationState();
 
   const uint32_t now = millis();
   closeDoubleResetWindow(now);
@@ -335,6 +378,7 @@ void loop() {
   if (want_calibration_reset) {
     want_calibration_reset = false;
     desk.resetCalibration();
+    calibration_pending = true;
     mqtt.publishLog("calibration reset; starting fresh from seed margins");
   }
   if (want_forced_update) {
