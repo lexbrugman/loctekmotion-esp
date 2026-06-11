@@ -45,6 +45,7 @@ void MqttManager::begin(const DeviceConfig& config, CommandHandler handler) {
   log_top_ = base_ + "/log";
   ota_channel_top_ = base_ + "/ota_channel";
   childlock_top_ = base_ + "/childlock";
+  alarm_top_ = base_ + "/alarm";
   movement_avail_top_ = base_ + "/movement_available";
   calibration_top_ = base_ + "/calibration";
 
@@ -170,12 +171,15 @@ void MqttManager::announce() {
           base_ +
           "/childlock\",\"icon\":\"mdi:account-lock\",\"entity_category\":"
           "\"config\"");
-  // Was previously a button; clear its retained discovery config so it
-  // doesn't linger as a duplicate entity.
-  mqtt_.publish((String(cfg::kDiscoveryPrefix) + "/button/" + config_.device_id +
-                "/childlock/config")
-                    .c_str(),
-                "", true);
+
+  // Sit-stand reminder alarm: a toggle the desk reflects on its display
+  // ("=XX" with a blinking '='), so its real state is trackable like child
+  // lock. Movement-gated: the desk ignores the command while child-locked.
+  publishDiscoveryEntity(
+      "switch", "alarm", "Alarm",
+      "\"command_topic\":\"" + base_ + "/cmd/alarm\",\"state_topic\":\"" + base_ +
+          "/alarm\",\"icon\":\"mdi:alarm\"",
+      movement_avail_top_);
 
   // --- Buttons ---
   // movement: true for buttons that issue movement commands the desk ignores
@@ -187,7 +191,6 @@ void MqttManager::announce() {
       {"sit", "Sit", "mdi:chair-rolling", false, true},
       {"stand", "Stand", "mdi:human-handsup", false, true},
       {"memory", "Memory", "mdi:alpha-m-box", true, true},
-      {"alarm", "Alarm", "mdi:alarm", false, true},
       {"wake", "Wake screen", "mdi:gesture-tap-button", true, false},
       {"calibration_reset", "Reset calibration", "mdi:restore", true, false},
       {"update", "Firmware update", "mdi:cloud-download", true, false},
@@ -281,6 +284,10 @@ void MqttManager::publishLog(const String& message) {
 void MqttManager::publishChildLock(bool locked) {
   if (mqtt_.connected())
     mqtt_.publish(childlock_top_.c_str(), locked ? "ON" : "OFF", true);
+}
+void MqttManager::publishAlarm(bool on) {
+  if (mqtt_.connected())
+    mqtt_.publish(alarm_top_.c_str(), on ? "ON" : "OFF", true);
 }
 void MqttManager::publishMovementAvailable(bool available) {
   if (mqtt_.connected())

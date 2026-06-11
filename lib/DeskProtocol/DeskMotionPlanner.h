@@ -43,7 +43,6 @@ class DeskMotionPlanner {
     float target_deadband;          // "close enough" to a moveToHeight target
     float coarse_target_deadband;   // deadband at/above fine_height_limit, where
                                     // readings are whole centimetres
-    uint32_t hold_duration;         // how long to hold a held-style command
     uint32_t seek_settle_delay;     // max wait for stability; fires early once stable
     uint32_t stable_duration;       // height unchanged this long before sampling
     uint32_t correction_tap_max;    // ceiling on a single correction tap drive (ms)
@@ -100,8 +99,8 @@ class DeskMotionPlanner {
   // --- One-shot command (wake, settle, then send once) ---
   void issue(const desk_cmd::Frame& frame, uint32_t now);
 
-  // --- Held command (wake, settle, then repeat at cadence for hold_duration) ---
-  void holdCommand(const desk_cmd::Frame& frame, uint32_t now);
+  // --- Held command (wake, settle, then repeat at cadence for |duration|) ---
+  void holdCommand(const desk_cmd::Frame& frame, uint32_t now, uint32_t duration);
 
   // Advance the state machine; call every loop iteration.
   void tick(uint32_t now, bool has_height, float height, uint32_t height_age);

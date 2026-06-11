@@ -50,17 +50,18 @@ serves any number of them. Device name is just the friendly label shown in HA.
 | Height | sensor | decoded desk height |
 | WiFi signal / Uptime / OTA channel | sensor | diagnostics |
 | Preset 1/2, Sit, Stand | button | stored positions |
-| Memory, Alarm, Wake screen | button | |
+| Memory, Wake screen | button | |
 | Child lock | switch | tracks the desk's real state (the handset's "LOC" display) |
+| Alarm | switch | sit-stand reminder; tracks the desk's real state (the handset's blinking "=XX" display); off is sent as the 3 s hold the desk requires |
 | Reset calibration | button | wipe the learned motion model (see [below](#height-seeking--self-calibration)) |
 | Firmware update | button | force an OTA check now |
 | Wi-Fi setup | button | reboot into the captive portal |
 | Restart | button | reboot the ESP |
 
 The desk ignores movement commands while child-locked, so every
-movement-related entity (cover, target height, the preset/sit/stand/memory/
-alarm buttons) is marked unavailable - greyed out in HA - while the lock is
-on, rather than silently doing nothing.
+movement-related entity (cover, target height, the preset/sit/stand/memory
+buttons and the alarm switch) is marked unavailable - greyed out in HA -
+while the lock is on, rather than silently doing nothing.
 
 ## Height seeking & self-calibration
 

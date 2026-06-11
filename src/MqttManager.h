@@ -33,6 +33,7 @@ class MqttManager {
   void publishUptime(unsigned long seconds);
   void publishLog(const String& message);
   void publishChildLock(bool locked);
+  void publishAlarm(bool on);
   void publishMovementAvailable(bool available);
   // Learned motion calibration as one retained JSON blob; the six diagnostic
   // sensors announce() declares (disabled by default in HA) each pick one key
@@ -71,6 +72,7 @@ class MqttManager {
   String log_top_;
   String ota_channel_top_;
   String childlock_top_;
+  String alarm_top_;
   String movement_avail_top_;
   String calibration_top_;
 };

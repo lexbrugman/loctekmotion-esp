@@ -62,11 +62,19 @@ class DeskController {
   void sit() { issue(desk_cmd::Sit); }
   void stand() { issue(desk_cmd::Stand); }
   void memory() { issue(desk_cmd::Memory); }
+  // Arms the sit-stand reminder alarm (a tap; on the desk a further tap
+  // cycles the interval); the display shows "=XX" with a blinking '=' — see
+  // loop()'s alarm tracking and alarmOn().
   void alarm() { issue(desk_cmd::Alarm); }
+  // Disarms the alarm: the desk only accepts this as a ~3 s held button
+  // press — a tap would merely cycle the reminder interval.
+  void alarmOff();
+  // Best-known alarm state, derived from the desk's own display (see loop()).
+  bool alarmOn() const { return alarm_on_; }
   // Child lock only registers on the desk when the command is held, like a
   // long handset button-press — a single tap (issue()) looks like Memory to
   // it, since both share the same raw frame. See DeskMotionPlanner::holdCommand.
-  void childLock() { planner_.holdCommand(desk_cmd::ChildLock, millis()); }
+  void childLock();
   // Best-known child-lock state — see loop()'s "LOC"/height detection for how
   // this is derived.
   bool childLocked() const { return child_locked_; }
@@ -96,4 +104,12 @@ class DeskController {
   // Child-lock state, derived from the desk's own display (see loop()): a
   // "LOC" frame means locked, any successfully-decoded height means unlocked.
   bool child_locked_ = false;
+
+  // Alarm state, derived from the display's "=XX" frames. Unlike child lock,
+  // a height frame is *expected* while the alarm is on (movement shows the
+  // live height), so clearing needs the static-height rule in loop().
+  bool alarm_on_ = false;
+  uint32_t last_alarm_frame_at_ = 0;
+  float last_seen_height_ = -1.0f;      // last decoded value...
+  uint32_t last_height_change_at_ = 0;  // ...and when it last differed
 };

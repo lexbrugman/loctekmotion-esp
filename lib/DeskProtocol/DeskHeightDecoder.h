@@ -33,6 +33,12 @@ class DeskHeightDecoder {
   // is engaged.
   bool isLockDisplay() const { return lock_display_; }
 
+  // True for exactly the feed() call that completes a frame whose leading
+  // digit is '=' (top+bottom segments, a+d) — the desk shows "=XX" (with the
+  // '=' blinking) in place of the height while the sit-stand reminder alarm
+  // is armed.
+  bool isAlarmDisplay() const { return alarm_display_; }
+
   // Plausibility window (cm). Frames decoding outside this band are rejected as
   // line noise. Deliberately wider than any real desk's travel.
   static constexpr float kMinPlausible = 30.0f;
@@ -61,4 +67,5 @@ class DeskHeightDecoder {
   float height_ = 0.0f;
   bool has_height_ = false;
   bool lock_display_ = false;
+  bool alarm_display_ = false;
 };

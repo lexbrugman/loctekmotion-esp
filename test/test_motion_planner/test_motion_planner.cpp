@@ -20,7 +20,6 @@ constexpr DeskMotionPlanner::Timing kTiming{
     /*wake_retry_interval=*/150,
     /*target_deadband=*/0.5f,
     /*coarse_target_deadband=*/1.0f,
-    /*hold_duration=*/320,
     /*seek_settle_delay=*/200,
     /*stable_duration=*/0,  // 0 = stable on the first tick with a height
     /*correction_tap_max=*/300,
@@ -316,8 +315,8 @@ void test_held_command_repeats_at_cadence_then_stops() {
   DeskMotionPlanner p(kMin, kMax, kTiming, kTunables, std::ref(rec));
 
   // Mirrors holding a handset button: wake, settle, then resend the frame at
-  // the movement cadence for hold_duration (320 ms here) before releasing.
-  p.holdCommand(desk_cmd::ChildLock, 1000);
+  // the movement cadence for the requested duration before releasing.
+  p.holdCommand(desk_cmd::ChildLock, 1000, /*duration=*/320);
   TEST_ASSERT_TRUE(sentFrame(rec, 0, desk_cmd::Wake));
   TEST_ASSERT_FALSE(p.moving());  // a held command isn't "moving" the desk
 

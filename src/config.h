@@ -154,14 +154,31 @@ inline constexpr uint32_t kTerminalSpeedDriveMin = 2000;
 inline constexpr uint32_t kCorrectionTapMax = 300;
 // How long to hold a held-style command (e.g. Child Lock): the desk only
 // registers some toggles when the signal mimics a sustained handset
-// button-press, not a single tap — matches the upstream ESPHome config's
-// hold-then-auto-release duration for the same command.
+// button-press, not a single tap.
 inline constexpr uint32_t kChildLockHold = 5000;
 // After issuing a child-lock toggle, how long to keep showing the requested
 // state optimistically before trusting the desk's own display again: covers
 // kChildLockHold (the desk doesn't even start responding until the held
 // command is released) plus a margin for the display to update.
 inline constexpr uint32_t kChildLockToggleSettle = kChildLockHold + 2000;
+// While the sit-stand reminder alarm is armed the handset shows "=XX"
+// (blinking '=') instead of the height; movement still works and shows the
+// live height, returning to "=XX" shortly after the desk stops; and the
+// display never sleeps (the blink keeps it streaming). A height report alone
+// therefore can't mean "alarm off" the way it means "not child-locked" — the
+// state clears on either piece of positive contrary evidence: a height that
+// has been static this long with no "=" frame for equally long, or a fully
+// dark display (no frames of any kind) for this long.
+inline constexpr uint32_t kAlarmClearTimeout = 3000;
+// A tap of the alarm button arms the reminder / cycles its interval;
+// *disarming* requires holding it, so the switch's OFF is sent as a held
+// command (like child lock).
+inline constexpr uint32_t kAlarmOffHold = 3500;
+// After toggling the alarm via HA, how long to keep showing the requested
+// state optimistically: disarming takes kAlarmOffHold itself plus the
+// kAlarmClearTimeout static-height window before the real state can confirm.
+inline constexpr uint32_t kAlarmToggleSettle =
+    kAlarmOffHold + kAlarmClearTimeout + 2000;
 
 // --- Double-reset detection --------------------------------------------------
 // Pressing the board's RST button twice within this window of booting

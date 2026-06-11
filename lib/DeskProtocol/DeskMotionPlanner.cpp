@@ -125,8 +125,9 @@ void DeskMotionPlanner::issue(const desk_cmd::Frame& frame, uint32_t now) {
   one_shot_ = {true, frame, now + timing_.wake_settle};
 }
 
-void DeskMotionPlanner::holdCommand(const desk_cmd::Frame& frame, uint32_t now) {
-  hold_ = {frame, now + timing_.hold_duration};
+void DeskMotionPlanner::holdCommand(const desk_cmd::Frame& frame, uint32_t now,
+                                    uint32_t duration) {
+  hold_ = {frame, now + duration};
   startMove(Mode::kHold, now);
 }
 
