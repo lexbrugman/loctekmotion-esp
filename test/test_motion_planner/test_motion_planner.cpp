@@ -19,7 +19,7 @@ constexpr DeskMotionPlanner::Timing kTiming{
     /*target_timeout=*/500,
     /*wake_retry_interval=*/150,
     /*target_deadband=*/0.5f,
-    /*hold_duration=*/320,
+    /*coarse_target_deadband=*/1.0f,
     /*seek_settle_delay=*/200,
     /*stable_duration=*/0,  // 0 = stable on the first tick with a height
     /*correction_tap_max=*/300,
@@ -315,8 +315,8 @@ void test_held_command_repeats_at_cadence_then_stops() {
   DeskMotionPlanner p(kMin, kMax, kTiming, kTunables, std::ref(rec));
 
   // Mirrors holding a handset button: wake, settle, then resend the frame at
-  // the movement cadence for hold_duration (320 ms here) before releasing.
-  p.holdCommand(desk_cmd::ChildLock, 1000);
+  // the movement cadence for the requested duration before releasing.
+  p.holdCommand(desk_cmd::ChildLock, 1000, /*duration=*/320);
   TEST_ASSERT_TRUE(sentFrame(rec, 0, desk_cmd::Wake));
   TEST_ASSERT_FALSE(p.moving());  // a held command isn't "moving" the desk
 
@@ -489,6 +489,109 @@ void test_seek_learning_is_gated_above_the_fine_resolution_limit() {
   TEST_ASSERT_FLOAT_WITHIN(0.001f, 25.0f, p.learnedState().tap_gain_up);
 }
 
+void test_seek_stop_decision_runs_between_command_frames() {
+  // The reached check must fire on the tick a satisfying height report
+  // arrives, not be held until the next command-frame slot — that delay is a
+  // late stop of up to a full command interval, i.e. a built-in overshoot.
+  Recorder rec;
+  DeskMotionPlanner p(kMin, kMax, kSeekTiming, kTunables, std::ref(rec));
+
+  p.moveToHeight(99.0f, 1000, true, 90.0f);
+  p.tick(1200, true, 94.0f, kFresh);  // frame slot: 94 + 4 < 99 -> keep driving
+  TEST_ASSERT_TRUE(p.moving());       // next frame not due until 1300
+
+  p.tick(1250, true, 95.5f, kFresh);  // mid-interval report: 95.5 + 4 >= 99
+  TEST_ASSERT_FALSE(p.moving());      // stops now, not at the 1300 frame slot
+  TEST_ASSERT_TRUE(p.seeking());      // settling
+}
+
+void test_correction_tap_ends_at_its_computed_duration() {
+  // A tap's end must be honoured to tick resolution, not rounded up to the
+  // next command-frame slot — otherwise actual tap durations quantize to the
+  // frame cadence and the learned quadratic gain is fitted to noise.
+  Recorder rec;
+  DeskMotionPlanner p(kMin, kMax, kSeekTiming, kTunables, std::ref(rec));
+
+  p.moveToHeight(99.0f, 1000, true, 90.0f);
+  p.tick(1300, true, 95.1f, kFresh);  // fallback stop (95.1 + 4 >= 99)
+  p.tick(1500, true, 97.0f, kFresh);  // settle: error 2.0 -> 282 ms tap (ends 1782)
+  TEST_ASSERT_TRUE(p.moving());
+
+  p.tick(1700, true, 97.5f, kFresh);  // tap frame sent; next slot would be 1800
+  TEST_ASSERT_TRUE(p.moving());
+
+  p.tick(1785, true, 97.8f, kFresh);  // past 1782 -> tap ends now, not at 1800
+  TEST_ASSERT_FALSE(p.moving());
+  TEST_ASSERT_TRUE(p.seeking());  // settling after the tap
+
+  p.tick(2000, true, 98.7f, kFresh);  // |98.7 - 99| <= 0.5 -> done
+  TEST_ASSERT_FALSE(p.seeking());
+}
+
+void test_seek_dead_reckons_between_height_reports() {
+  // The display only reports every ~100 ms; the stop must fire at the
+  // *predicted* crossing between reports, not wait for the report that
+  // confirms it. Learning then measures the coast from the dead-reckoned
+  // cut-off position, not the stale report.
+  Recorder rec;
+  DeskMotionPlanner p(kMin, kMax, kSeekTiming,
+                      withRates(kTunables, 0.0f, /*decel_rate=*/1.0f, 0.0f),
+                      std::ref(rec));
+
+  // Steady measured 3 cm/s climb; reports every 100 ms. The drive starts low
+  // enough that the early fallback-coast phase (estimator not yet valid)
+  // can't trip the stop.
+  p.moveToHeight(98.6f, 1000, true, 90.0f);
+  uint32_t t = 1100;
+  float h = 90.3f;
+  float last_h = h;
+  while (t <= 3000) {
+    p.tick(t, true, h, kFresh);
+    last_h = h;
+    t += 100;
+    h += 0.3f;
+  }
+  // Last report 96.0 at 3000: 96.0 + 2.25 < 98.6 -> still driving.
+  TEST_ASSERT_TRUE(p.moving());
+
+  // No new report, but 150 ms later dead reckoning puts the desk at
+  // 96.0 + 3·0.15 = 96.45: 96.45 + 2.25 >= 98.6 -> stop mid-interval.
+  p.tick(3150, true, last_h, kFresh);
+  TEST_ASSERT_FALSE(p.moving());
+  TEST_ASSERT_TRUE(p.seeking());
+
+  // Settles at 98.2: coast measured from the dead-reckoned 96.45, not the
+  // 96.0 report = 1.75 cm at 3 cm/s -> decel 9/(2·1.75) = 2.57 (rate 1.0
+  // replaces the 2.0 seed outright). |98.2 - 98.6| <= 0.5 -> done.
+  p.tick(3350, true, 98.2f, kFresh);
+  TEST_ASSERT_FALSE(p.seeking());
+  TEST_ASSERT_FLOAT_WITHIN(0.05f, 2.57f, p.learnedState().decel_up);
+}
+
+void test_coarse_zone_widens_the_deadband() {
+  // At/above fine_height_limit the display reports whole centimetres, so the
+  // fine deadband (0.5 here) can be unsatisfiable: a target of 110.9 reads as
+  // 110 (diff 0.9) or 111 (diff 0.1... but after a tap lands at 110.6 it reads
+  // 111 only past 110.5) and the planner would ping-pong between the two
+  // readings. The coarse deadband (1.0 here) accepts the nearest reading.
+  Recorder rec;
+  DeskMotionPlanner p(kMin, kMax, kSeekTiming, kTunables, std::ref(rec));
+
+  // Already as close as a whole-cm reading can get: no movement at all.
+  p.moveToHeight(110.9f, 1000, true, 110.0f);
+  TEST_ASSERT_FALSE(p.moving());
+  TEST_ASSERT_TRUE(rec.sent.empty());
+
+  // A seek settling in the coarse zone accepts within the coarse deadband
+  // instead of starting a correction tap.
+  p.moveToHeight(110.9f, 2000, true, 105.0f);
+  TEST_ASSERT_TRUE(p.moving());
+  p.tick(2200, true, 107.0f, kFresh);  // 107 + 4 >= 110.9 -> settling
+  TEST_ASSERT_FALSE(p.moving());
+  p.tick(2400, true, 110.0f, kFresh);  // |110 - 110.9| = 0.9 <= 1.0 -> done
+  TEST_ASSERT_FALSE(p.seeking());
+}
+
 void test_seek_waits_for_height_stability_before_sampling() {
   // Verifies that the settle phase waits until height stops changing for
   // stable_duration ms before firing, rather than sampling a mid-coast reading.
@@ -508,6 +611,48 @@ void test_seek_waits_for_height_stability_before_sampling() {
   // Height stable for 100 ms: settle fires, 1.8 cm outside deadband -> tap.
   p.tick(1600, true, 97.2f, kFresh);
   TEST_ASSERT_TRUE(p.moving());  // correction tap now running
+}
+
+void test_completed_seek_yields_a_report_once() {
+  Recorder rec;
+  DeskMotionPlanner p(kMin, kMax, kSeekTiming, kTunables, std::ref(rec));
+
+  DeskMotionPlanner::SeekReport r{};
+  TEST_ASSERT_FALSE(p.takeSeekReport(r));  // nothing completed yet
+
+  p.moveToHeight(99.0f, 1000, true, 90.0f);
+  p.tick(1300, true, 95.1f, kFresh);       // fallback stop: predicted coast 4.0
+  TEST_ASSERT_FALSE(p.takeSeekReport(r));  // still settling — not complete
+  p.tick(1500, true, 97.0f, kFresh);       // settle: obs coast 1.9; err 2.0 -> tap
+  p.tick(1800, true, 97.9f, kFresh);       // tap over -> settling again
+  p.tick(2000, true, 98.7f, kFresh);       // |98.7 - 99| <= 0.5 -> complete
+  TEST_ASSERT_FALSE(p.seeking());
+
+  TEST_ASSERT_TRUE(p.takeSeekReport(r));
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, 99.0f, r.target);
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, 90.0f, r.start_height);
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, 95.1f, r.stop_height);
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, 4.0f, r.stop_speed);  // terminal fallback
+  TEST_ASSERT_FALSE(r.stop_speed_measured);
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, 4.0f, r.predicted_coast);
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, 1.9f, r.observed_coast);
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, 98.7f, r.settled_height);
+  TEST_ASSERT_EQUAL(1, r.correction_taps);
+  TEST_ASSERT_EQUAL(1000, r.duration_ms);
+
+  TEST_ASSERT_FALSE(p.takeSeekReport(r));  // one-shot: consumed above
+}
+
+void test_aborted_seek_yields_no_report() {
+  Recorder rec;
+  DeskMotionPlanner p(kMin, kMax, kSeekTiming, kTunables, std::ref(rec));
+
+  p.moveToHeight(99.0f, 1000, true, 90.0f);
+  p.tick(1200, true, 91.0f, kFresh);  // driving
+  p.stop();                           // user STOP mid-seek
+
+  DeskMotionPlanner::SeekReport r{};
+  TEST_ASSERT_FALSE(p.takeSeekReport(r));
 }
 
 void test_set_learned_state_sanitizes_implausible_values() {
@@ -560,7 +705,13 @@ int main(int, char**) {
   RUN_TEST(test_seek_learns_decel_from_the_observed_coast);
   RUN_TEST(test_seek_learns_terminal_speed_after_a_long_drive);
   RUN_TEST(test_seek_learning_is_gated_above_the_fine_resolution_limit);
+  RUN_TEST(test_seek_stop_decision_runs_between_command_frames);
+  RUN_TEST(test_correction_tap_ends_at_its_computed_duration);
+  RUN_TEST(test_seek_dead_reckons_between_height_reports);
+  RUN_TEST(test_coarse_zone_widens_the_deadband);
   RUN_TEST(test_seek_waits_for_height_stability_before_sampling);
+  RUN_TEST(test_completed_seek_yields_a_report_once);
+  RUN_TEST(test_aborted_seek_yields_no_report);
   RUN_TEST(test_set_learned_state_sanitizes_implausible_values);
   return UNITY_END();
 }

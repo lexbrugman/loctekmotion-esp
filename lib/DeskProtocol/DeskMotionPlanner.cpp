@@ -28,7 +28,7 @@ void DeskMotionPlanner::startMove(Mode mode, uint32_t now) {
   send_(desk_cmd::Wake);
 }
 
-void DeskMotionPlanner::beginSeek(float target_cm, bool up, uint32_t now) {
+void DeskMotionPlanner::beginSeek(float target_cm, bool up, uint32_t now, float height) {
   estimator_.reset();  // stale samples from a previous move must not leak in
   seek_ = {};
   seek_.active = true;
@@ -36,7 +36,15 @@ void DeskMotionPlanner::beginSeek(float target_cm, bool up, uint32_t now) {
   seek_.phase = SeekPhase::kDriving;
   seek_.up = up;
   seek_.drive_started_at = now;
+  seek_.start_height = height;
   startMove(up ? Mode::kUp : Mode::kDown, now);
+}
+
+bool DeskMotionPlanner::takeSeekReport(SeekReport& out) {
+  if (!report_ready_) return false;
+  report_ready_ = false;
+  out = report_;
+  return true;
 }
 
 void DeskMotionPlanner::beginSettling(float height, uint32_t now) {
@@ -79,6 +87,17 @@ void DeskMotionPlanner::stop() {
   one_shot_.active = false;  // a pending preset must not fire after a STOP
 }
 
+float DeskMotionPlanner::deadbandAt(float height) const {
+  // At/above the fine-resolution limit the display reports whole centimetres,
+  // so a sub-resolution deadband can never be confirmed there: a target
+  // between two readings would tap back and forth between them until the
+  // attempt cap. Half the coarse resolution is the tightest deadband every
+  // target can satisfy.
+  const float fine = timing_.target_deadband;
+  const float coarse = timing_.coarse_target_deadband;
+  return (height >= timing_.fine_height_limit && coarse > fine) ? coarse : fine;
+}
+
 void DeskMotionPlanner::moveToHeight(float target_cm, uint32_t now, bool has_height,
                                      float height) {
   if (target_cm < min_height_) target_cm = min_height_;
@@ -90,10 +109,11 @@ void DeskMotionPlanner::moveToHeight(float target_cm, uint32_t now, bool has_hei
     return;
   }
 
-  if (target_cm > height + timing_.target_deadband) {
-    beginSeek(target_cm, /*up=*/true, now);
-  } else if (target_cm < height - timing_.target_deadband) {
-    beginSeek(target_cm, /*up=*/false, now);
+  const float deadband = deadbandAt(height);
+  if (target_cm > height + deadband) {
+    beginSeek(target_cm, /*up=*/true, now, height);
+  } else if (target_cm < height - deadband) {
+    beginSeek(target_cm, /*up=*/false, now, height);
   } else {
     stop();
   }
@@ -105,8 +125,9 @@ void DeskMotionPlanner::issue(const desk_cmd::Frame& frame, uint32_t now) {
   one_shot_ = {true, frame, now + timing_.wake_settle};
 }
 
-void DeskMotionPlanner::holdCommand(const desk_cmd::Frame& frame, uint32_t now) {
-  hold_ = {frame, now + timing_.hold_duration};
+void DeskMotionPlanner::holdCommand(const desk_cmd::Frame& frame, uint32_t now,
+                                    uint32_t duration) {
+  hold_ = {frame, now + duration};
   startMove(Mode::kHold, now);
 }
 
@@ -115,6 +136,7 @@ void DeskMotionPlanner::tick(uint32_t now, bool has_height, float height,
   // Feed each newly decoded value to the speed estimator exactly once.
   if (has_height && height != last_fed_height_) {
     last_fed_height_ = height;
+    last_height_change_at_ = now;
     estimator_.addSample(now, height);
   }
 
@@ -161,8 +183,10 @@ void DeskMotionPlanner::serviceMovement(uint32_t now, bool has_height, float hei
     }
   }
 
-  if (static_cast<int32_t>(now - motor_.next_frame_at) < 0) return;
-
+  // Stop decisions run on every tick; only frame *sending* is gated on the
+  // command cadence below. Gating these checks behind next_frame_at would
+  // delay each stop by up to a full command interval — biasing seeks toward
+  // overshoot and stretching correction taps past their computed duration.
   if (has_height) {
     if (motor_.mode == Mode::kUp && height >= max_height_) { stop(); return; }
     if (motor_.mode == Mode::kDown && height <= min_height_) { stop(); return; }
@@ -184,14 +208,32 @@ void DeskMotionPlanner::serviceMovement(uint32_t now, bool has_height, float hei
           if (speed < 0.0f) speed = -speed;
           measured = true;
         }
+        // Dead-reckon between reports: the display only reports every
+        // ~108 ms, so waiting for the report that confirms the stop point
+        // stops up to a full report late. With a measured speed, advance the
+        // last report by speed·(time since it changed) and stop at the
+        // predicted crossing instead; estimator validity bounds the gap to
+        // speed_max_age. The fallback speed must not extrapolate — an
+        // assumed speed across a stale gap could predict past the true
+        // position, and fallback errors have to stay on the undershoot side.
+        float position = height;
+        if (measured) {
+          const float gap_s =
+              static_cast<float>(now - last_height_change_at_) / 1000.0f;
+          position += (seek_.up ? speed : -speed) * gap_s;
+        }
         const float coast = model_.coastDistance(seek_.up, speed);
         const bool reached = motor_.mode == Mode::kUp
-                                 ? height + coast >= seek_.target
-                                 : height - coast <= seek_.target;
+                                 ? position + coast >= seek_.target
+                                 : position - coast <= seek_.target;
         if (reached) {
-          seek_.stop_height = height;
+          // The coast observation must measure from where the desk actually
+          // was at cut-off, so the learned start point is the dead-reckoned
+          // position, not the stale report.
+          seek_.stop_height = position;
           seek_.stop_speed = speed;
           seek_.stop_speed_measured = measured;
+          seek_.predicted_coast = coast;
           beginSettling(height, now);
           return;
         }
@@ -199,6 +241,7 @@ void DeskMotionPlanner::serviceMovement(uint32_t now, bool has_height, float hei
     }
   }
 
+  if (static_cast<int32_t>(now - motor_.next_frame_at) < 0) return;
   send_(motor_.mode == Mode::kUp ? desk_cmd::Up : desk_cmd::Down);
   motor_.next_frame_at = now + timing_.command_interval;
 }
@@ -220,10 +263,11 @@ void DeskMotionPlanner::serviceSeekSettling(uint32_t now, bool has_height, float
   // modeled inputs would feed the learning its own assumptions back.
   const bool settled_fine = height < timing_.fine_height_limit;
   if (seek_.correction_attempts == 0) {
+    const float coast = seek_.up ? height - seek_.stop_height
+                                 : seek_.stop_height - height;
+    seek_.observed_coast = coast;  // telemetry, regardless of learning gates
     const bool stop_fine = seek_.stop_height < timing_.fine_height_limit;
     if (seek_.stop_speed_measured && settled_fine && stop_fine) {
-      const float coast = seek_.up ? height - seek_.stop_height
-                                   : seek_.stop_height - height;
       if (coast > kMinLearnableMove) {
         model_.learnCoast(seek_.up, seek_.stop_speed, coast);
       }
@@ -245,8 +289,17 @@ void DeskMotionPlanner::serviceSeekSettling(uint32_t now, bool has_height, float
 
   const float abs_diff = height > seek_.target ? height - seek_.target
                                                 : seek_.target - height;
-  if (abs_diff <= timing_.target_deadband) { stop(); return; }
-  if (seek_.correction_attempts >= kMaxCorrectionAttempts) { stop(); return; }
+  if (abs_diff <= deadbandAt(height) ||
+      seek_.correction_attempts >= kMaxCorrectionAttempts) {
+    report_ = {seek_.target,         seek_.start_height,
+               seek_.stop_height,    seek_.stop_speed,
+               seek_.stop_speed_measured, seek_.predicted_coast,
+               seek_.observed_coast, height,
+               seek_.correction_attempts, now - seek_.drive_started_at};
+    report_ready_ = true;
+    stop();
+    return;
+  }
 
   ++seek_.correction_attempts;
   const bool tap_up = height < seek_.target;

@@ -90,11 +90,25 @@ inline constexpr uint32_t kHeightStaleTimeout = 1500;
 inline constexpr uint32_t kTargetTimeout = 8000;   // give up awaiting height
 inline constexpr uint32_t kWakeRetryInterval = 2000;  // re-wake cadence while waiting
 inline constexpr float kTargetDeadband = 0.3f;     // "close enough" to target
+// "Close enough" when the settled reading is in the coarse zone (at/above
+// kFineHeightLimit the display reports whole centimetres). Half the 1 cm
+// resolution is the tightest deadband every target can satisfy there; anything
+// smaller leaves the planner tapping back and forth between the two readings
+// bracketing the target until the attempt cap runs out.
+inline constexpr float kCoarseTargetDeadband = 0.5f;
 // Maximum wait for stability after stopping; fires early once height is stable.
-inline constexpr uint32_t kSeekSettleDelay = 500;
+// Must comfortably exceed the longest real coast (~1.5 s from cruise speed):
+// if this fires mid-coast, the "settled" height truncates every coast
+// observation, the learned deceleration converges above its true value, and
+// seeks systematically overshoot instead of creeping up from the undershoot
+// side.
+inline constexpr uint32_t kSeekSettleDelay = 2000;
 // How long height must remain unchanged before the post-drive sample is taken.
 // Ensures we measure the desk's truly final position, not a mid-coast reading.
-inline constexpr uint32_t kStableDuration = 200;
+// At 0.1 cm display resolution, a creep slower than 0.5 cm/s produces steps
+// more than 200 ms apart, so this must be long enough not to mistake the slow
+// tail of a coast for stability; 350 ms tolerates creep down to ~0.3 cm/s.
+inline constexpr uint32_t kStableDuration = 350;
 
 // --- Motion model (learned kinematics; see MotionModel) -----------------------
 // Seeking predicts the coast distance from the live travel speed and a learned
@@ -140,14 +154,31 @@ inline constexpr uint32_t kTerminalSpeedDriveMin = 2000;
 inline constexpr uint32_t kCorrectionTapMax = 300;
 // How long to hold a held-style command (e.g. Child Lock): the desk only
 // registers some toggles when the signal mimics a sustained handset
-// button-press, not a single tap — matches the upstream ESPHome config's
-// hold-then-auto-release duration for the same command.
+// button-press, not a single tap.
 inline constexpr uint32_t kChildLockHold = 5000;
 // After issuing a child-lock toggle, how long to keep showing the requested
 // state optimistically before trusting the desk's own display again: covers
 // kChildLockHold (the desk doesn't even start responding until the held
 // command is released) plus a margin for the display to update.
 inline constexpr uint32_t kChildLockToggleSettle = kChildLockHold + 2000;
+// While the sit-stand reminder alarm is armed the handset shows "=XX"
+// (blinking '=') instead of the height; movement still works and shows the
+// live height, returning to "=XX" shortly after the desk stops; and the
+// display never sleeps (the blink keeps it streaming). A height report alone
+// therefore can't mean "alarm off" the way it means "not child-locked" — the
+// state clears on either piece of positive contrary evidence: a height that
+// has been static this long with no "=" frame for equally long, or a fully
+// dark display (no frames of any kind) for this long.
+inline constexpr uint32_t kAlarmClearTimeout = 3000;
+// A tap of the alarm button arms the reminder / cycles its interval;
+// *disarming* requires holding it, so the switch's OFF is sent as a held
+// command (like child lock).
+inline constexpr uint32_t kAlarmOffHold = 3500;
+// After toggling the alarm via HA, how long to keep showing the requested
+// state optimistically: disarming takes kAlarmOffHold itself plus the
+// kAlarmClearTimeout static-height window before the real state can confirm.
+inline constexpr uint32_t kAlarmToggleSettle =
+    kAlarmOffHold + kAlarmClearTimeout + 2000;
 
 // --- Double-reset detection --------------------------------------------------
 // Pressing the board's RST button twice within this window of booting

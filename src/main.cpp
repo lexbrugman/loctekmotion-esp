@@ -7,6 +7,7 @@
 #include "ConfigStore.h"
 #include "DeskController.h"
 #include "MqttManager.h"
+#include "OptimisticSwitch.h"
 #include "Platform.h"
 #include "UpdateManager.h"
 #include "config.h"
@@ -73,6 +74,47 @@ void closeDoubleResetWindow(uint32_t now) {
   }
 }
 
+// Learned motion calibration (retained JSON; see MqttManager's calibration
+// sensors). Values only change when a seek completes or calibration is reset,
+// so publish on those events plus once per broker connection — the flag goes
+// back to pending on each, and the loop retries until a publish succeeds.
+bool calibration_pending = true;
+
+void publishCalibrationState() {
+  if (!calibration_pending || !mqtt.connected()) return;
+  calibration_pending = false;
+  mqtt.publishCalibration(desk.learnedState());
+}
+
+// One-line summary per completed seek: how the coast prediction compared to
+// reality and what the corrections had to clean up — the ground truth for
+// judging the motion model's convergence from the HA log.
+void publishSeekReport(const DeskController::SeekReport& r) {
+  String m;
+  m.reserve(160);
+  m += "seek ";
+  m += String(r.start_height, 1);
+  m += "->";
+  m += String(r.target, 1);
+  m += ": settled ";
+  m += String(r.settled_height, 1);
+  m += " (err ";
+  m += String(r.settled_height - r.target, 2);
+  m += "), coast pred ";
+  m += String(r.predicted_coast, 2);
+  m += " obs ";
+  m += String(r.observed_coast, 2);
+  m += " @ ";
+  m += String(r.stop_speed, 2);
+  m += r.stop_speed_measured ? " cm/s measured, taps " : " cm/s assumed, taps ";
+  m += String(r.correction_taps);
+  m += ", ";
+  m += String(static_cast<float>(r.duration_ms) / 1000.0f, 1);
+  m += "s";
+  mqtt.publishLog(m);
+  calibration_pending = true;  // the seek's learning updates just landed
+}
+
 // The desk streams its display ~9x/s while moving, mostly repeating the same
 // value — republish (retained) only when it actually changes.
 float last_published_height = -1.0f;
@@ -85,55 +127,37 @@ void publishHeightState(float cm) {
   if (frac >= 0.0f) mqtt.publishPosition(static_cast<int>(lroundf(frac * 100.0f)));
 }
 
-// Republish (retained) only when the tracked child-lock state actually
-// changes. lock_state_published guards the very first publish, since
-// last_published_lock's default of false could otherwise be mistaken for an
-// already-published "OFF".
-bool last_published_lock = false;
-bool lock_state_published = false;
-
-// Set by handleCommand after issuing a toggle: holds last_published_lock at
-// the requested state (instead of the still-stale real one) until the desk
-// catches up or kChildLockToggleSettle passes. Without this, the switch would
-// flip back to the old state for the ~kChildLockHold the desk takes to even
-// start responding to a held toggle.
-bool lock_optimistic_pending = false;
-uint32_t lock_optimistic_until = 0;
+// Switch state trackers (see OptimisticSwitch): retained publish-on-change,
+// bridging the desk's slow read-back after a toggle with an optimistic hold —
+// child lock registers only after its held command, and an alarm disarm is
+// confirmed only once the display detection windows have run their course.
+OptimisticSwitch lock_switch;
+OptimisticSwitch alarm_switch;
+// Movement availability uses the change-tracking half only (it's derived
+// state, never commanded): the desk ignores movement commands while
+// child-locked, so the movement-related entities grey out instead of
+// silently doing nothing. Tracks the real lock state, not the optimistic
+// switch above, since it reflects whether commands will actually work.
+OptimisticSwitch movement_available;
 
 void publishChildLockState() {
   if (!mqtt.connected()) return;
-  const bool locked = desk.childLocked();
-
-  if (lock_optimistic_pending) {
-    if (locked == last_published_lock ||
-        static_cast<int32_t>(millis() - lock_optimistic_until) >= 0) {
-      lock_optimistic_pending = false;
-    } else {
-      return;  // keep showing the requested state for now
-    }
-  }
-
-  if (lock_state_published && locked == last_published_lock) return;
-  lock_state_published = true;
-  last_published_lock = locked;
-  mqtt.publishChildLock(locked);
+  bool locked;
+  if (lock_switch.sync(desk.childLocked(), millis(), locked))
+    mqtt.publishChildLock(locked);
 }
 
-// The desk ignores movement commands while child-locked; gate the
-// movement-related entities (cover, target height, presets/sit/stand/memory/
-// alarm — see MqttManager::announce) on this so they grey out instead of
-// silently doing nothing. Tracks child_locked_ directly (not the optimistic
-// switch state above), since it reflects whether commands will actually work.
-bool last_published_movement_available = true;
-bool movement_available_published = false;
+void publishAlarmState() {
+  if (!mqtt.connected()) return;
+  bool on;
+  if (alarm_switch.sync(desk.alarmOn(), millis(), on)) mqtt.publishAlarm(on);
+}
 
 void publishMovementAvailability() {
   if (!mqtt.connected()) return;
-  const bool available = !desk.childLocked();
-  if (movement_available_published && available == last_published_movement_available) return;
-  movement_available_published = true;
-  last_published_movement_available = available;
-  mqtt.publishMovementAvailable(available);
+  bool available;
+  if (movement_available.sync(!desk.childLocked(), millis(), available))
+    mqtt.publishMovementAvailable(available);
 }
 
 // Strict numeric parse for movement payloads. String::toFloat() returns 0.0
@@ -171,23 +195,22 @@ void handleCommand(const String& object, const String& payload) {
   } else if (object == "memory") {
     desk.memory();
   } else if (object == "alarm") {
-    desk.alarm();
-  } else if (object == "childlock") {
-    const bool want_locked = (payload == "ON");
-    if (want_locked != desk.childLocked()) {
-      desk.childLock();
-      // The desk takes a while (a held button-press) to register this; show
-      // the requested state right away rather than the stale one.
-      last_published_lock = want_locked;
-      lock_state_published = true;
-      lock_optimistic_pending = true;
-      lock_optimistic_until = millis() + cfg::kChildLockToggleSettle;
-      mqtt.publishChildLock(want_locked);
-    } else {
-      // Already in the requested state - HA's optimistic UI flipped; snap it
-      // back to the real (unchanged) state.
-      mqtt.publishChildLock(desk.childLocked());
+    bool publish;
+    if (alarm_switch.request(payload == "ON", desk.alarmOn(), millis(),
+                             cfg::kAlarmToggleSettle, publish)) {
+      // Arming is a tap; disarming only registers as a 3 s held press (a
+      // tap would cycle the reminder interval instead).
+      if (publish) desk.alarm();
+      else desk.alarmOff();
     }
+    mqtt.publishAlarm(publish);
+  } else if (object == "childlock") {
+    bool publish;
+    if (lock_switch.request(payload == "ON", desk.childLocked(), millis(),
+                            cfg::kChildLockToggleSettle, publish)) {
+      desk.childLock();
+    }
+    mqtt.publishChildLock(publish);
   } else if (object == "wake") {
     desk.wakeScreen();
   } else if (object == "calibration_reset") {
@@ -303,6 +326,7 @@ void setup() {
 
   desk.begin();
   desk.onHeight(publishHeightState);
+  desk.onSeekDone(publishSeekReport);
 
   mqtt.begin(config, handleCommand);
   updater.begin(cfg::kSwVersion, [](const String& m) {
@@ -321,7 +345,9 @@ void loop() {
   updater.loop();
 
   publishChildLockState();
+  publishAlarmState();
   publishMovementAvailability();
+  publishCalibrationState();
 
   const uint32_t now = millis();
   closeDoubleResetWindow(now);
@@ -335,6 +361,7 @@ void loop() {
   if (want_calibration_reset) {
     want_calibration_reset = false;
     desk.resetCalibration();
+    calibration_pending = true;
     mqtt.publishLog("calibration reset; starting fresh from seed margins");
   }
   if (want_forced_update) {

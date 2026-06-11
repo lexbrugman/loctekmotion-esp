@@ -6,6 +6,7 @@
 #include <functional>
 
 #include "ConfigStore.h"
+#include "MotionModel.h"
 #include "Platform.h"
 
 // MqttManager owns the broker connection and the Home Assistant integration:
@@ -32,7 +33,12 @@ class MqttManager {
   void publishUptime(unsigned long seconds);
   void publishLog(const String& message);
   void publishChildLock(bool locked);
+  void publishAlarm(bool on);
   void publishMovementAvailable(bool available);
+  // Learned motion calibration as one retained JSON blob; the six diagnostic
+  // sensors announce() declares (disabled by default in HA) each pick one key
+  // out of it via value_template.
+  void publishCalibration(const MotionModel::State& s);
 
  private:
   bool reconnect();
@@ -66,5 +72,7 @@ class MqttManager {
   String log_top_;
   String ota_channel_top_;
   String childlock_top_;
+  String alarm_top_;
   String movement_avail_top_;
+  String calibration_top_;
 };

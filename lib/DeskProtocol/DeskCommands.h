@@ -3,9 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 
-// Fixed command frames sent *to* the LoctekMotion control box. These are the
-// exact byte sequences (including the control box's checksum bytes) used by the
-// upstream ESPHome configuration, so they are known-good for this hardware.
+// Fixed command frames sent *to* the LoctekMotion control box.
 //
 // A command is only acted upon while the handset "screen" is awake; callers are
 // expected to assert the screen-wake GPIO and/or send kWake first.

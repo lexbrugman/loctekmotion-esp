@@ -24,6 +24,7 @@ bool DeskHeightDecoder::feed(uint8_t byte) {
     len_ = 0;
     buf_[len_++] = byte;
     lock_display_ = false;
+    alarm_display_ = false;
     return false;
   }
 
@@ -61,6 +62,15 @@ bool DeskHeightDecoder::parseFrame() {
   if ((buf_[3] & ~kDecimalBit) == 0x38 && (buf_[4] & ~kDecimalBit) == 0x5c &&
       (buf_[5] & ~kDecimalBit) == 0x39) {
     lock_display_ = true;
+    return false;
+  }
+
+  // The sit-stand reminder alarm replaces the height with "=XX" (blinking):
+  // the '=' is exactly the top and bottom segments (a+d). The blink's off
+  // phase (blank leading digit) falls through to the zero/blank rejection
+  // below, and anything else unrecognised is rejected as a height anyway.
+  if ((buf_[3] & ~kDecimalBit) == 0x09) {
+    alarm_display_ = true;
     return false;
   }
 

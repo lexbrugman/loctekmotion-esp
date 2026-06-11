@@ -105,6 +105,54 @@ void test_detects_lock_display() {
   TEST_ASSERT_FALSE(d.isLockDisplay());
 }
 
+// "=XX" -> sit-stand reminder alarm indicator, not a height. The '=' is
+// exactly the handset's top+bottom segment pair (a+d, 0x09, both blinking in
+// sync). isAlarmDisplay() is set on the frame-ending byte and clears once
+// the next frame starts.
+void test_detects_alarm_display() {
+  DeskHeightDecoder d;
+  const uint8_t f[] = {0x9b, 0x07, 0x12, 0x09, SEG[0], SEG[5], 0x00, 0x00, 0x9d};
+  TEST_ASSERT_FALSE(feedAll(d, f, sizeof(f)));
+  TEST_ASSERT_FALSE(d.has_height());
+  TEST_ASSERT_TRUE(d.isAlarmDisplay());
+
+  d.feed(0x9b);  // next frame starts; the indicator is no longer "current"
+  TEST_ASSERT_FALSE(d.isAlarmDisplay());
+}
+
+// Other horizontal-bar combinations are not the alarm glyph: they must be
+// rejected as heights without setting the alarm indicator.
+void test_other_bar_glyphs_are_not_an_alarm_display() {
+  const uint8_t glyphs[] = {0x41, 0x48, 0x49};
+  for (uint8_t glyph : glyphs) {
+    DeskHeightDecoder d;
+    const uint8_t f[] = {0x9b, 0x07, 0x12, glyph, SEG[0], SEG[5], 0x00, 0x00, 0x9d};
+    TEST_ASSERT_FALSE(feedAll(d, f, sizeof(f)));
+    TEST_ASSERT_FALSE(d.has_height());
+    TEST_ASSERT_FALSE(d.isAlarmDisplay());
+  }
+}
+
+// A lone horizontal bar is the transitional "-", not an '=': "-05" must be
+// rejected as a height without being mistaken for the alarm indicator.
+void test_lone_leading_hyphen_is_not_an_alarm_display() {
+  DeskHeightDecoder d;
+  const uint8_t f[] = {0x9b, 0x07, 0x12, 0x40, SEG[0], SEG[5], 0x00, 0x00, 0x9d};
+  TEST_ASSERT_FALSE(feedAll(d, f, sizeof(f)));
+  TEST_ASSERT_FALSE(d.has_height());
+  TEST_ASSERT_FALSE(d.isAlarmDisplay());
+}
+
+// The alarm blink's off phase shows " 00" (blank leading digit) — neither a
+// height nor an alarm indicator.
+void test_alarm_blink_off_phase_is_ignored() {
+  DeskHeightDecoder d;
+  const uint8_t f[] = {0x9b, 0x07, 0x12, 0x00, SEG[0], SEG[0], 0x00, 0x00, 0x9d};
+  TEST_ASSERT_FALSE(feedAll(d, f, sizeof(f)));
+  TEST_ASSERT_FALSE(d.has_height());
+  TEST_ASSERT_FALSE(d.isAlarmDisplay());
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_decodes_fractional_height);
@@ -116,5 +164,9 @@ int main(int, char**) {
   RUN_TEST(test_resynchronises_after_garbage);
   RUN_TEST(test_accepts_len10_frame);
   RUN_TEST(test_detects_lock_display);
+  RUN_TEST(test_detects_alarm_display);
+  RUN_TEST(test_other_bar_glyphs_are_not_an_alarm_display);
+  RUN_TEST(test_lone_leading_hyphen_is_not_an_alarm_display);
+  RUN_TEST(test_alarm_blink_off_phase_is_ignored);
   return UNITY_END();
 }
