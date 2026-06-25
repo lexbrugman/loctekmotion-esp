@@ -39,6 +39,7 @@ void MqttManager::begin(const DeviceConfig& config, CommandHandler handler) {
   cmd_prefix_ = base_ + "/cmd/";
   height_top_ = base_ + "/height";
   target_top_ = base_ + "/target";
+  fw_latest_top_ = base_ + "/fw_latest";
   wifi_top_ = base_ + "/wifi";
   uptime_top_ = base_ + "/uptime";
   log_top_ = base_ + "/log";
@@ -151,6 +152,15 @@ void MqttManager::announce() {
           "\"mdi:arrow-up-down\"",
       movement_avail_top_);
 
+  // --- Update (firmware) ---
+  publishDiscoveryEntity(
+      "update", "firmware", "Firmware",
+      "\"installed_version\":\"" + String(cfg::kSwVersion) +
+          "\",\"latest_version_topic\":\"" + fw_latest_top_ +
+          "\",\"command_topic\":\"" + base_ +
+          "/cmd/update\",\"payload_install\":\"PRESS\","
+          "\"device_class\":\"firmware\",\"entity_category\":\"config\"");
+
   // --- Switches ---
   publishDiscoveryEntity(
       "switch", "childlock", "Child lock",
@@ -183,7 +193,9 @@ void MqttManager::announce() {
       {"memory", "Memory", "mdi:alpha-m-box", true, true},
       {"wake", "Wake screen", "mdi:gesture-tap-button", true, false},
       {"calibration_reset", "Reset calibration", "mdi:restore", true, false},
-      {"update", "Firmware update", "mdi:cloud-download", true, false},
+      // Re-reads the OTA channel's version now instead of waiting for the next
+      // periodic poll; refreshes the Firmware entity without installing.
+      {"check_update", "Check for updates", "mdi:cloud-search", true, false},
       {"configure", "Wi-Fi setup", "mdi:wifi-cog", true, false},
       {"restart", "Restart", "mdi:restart", true, false},
   };
@@ -255,6 +267,10 @@ void MqttManager::publishHeight(float cm) {
 void MqttManager::publishTarget(float cm) {
   if (mqtt_.connected())
     mqtt_.publish(target_top_.c_str(), String(cm, 1).c_str(), true);
+}
+void MqttManager::publishFirmwareLatest(const String& version) {
+  if (mqtt_.connected())
+    mqtt_.publish(fw_latest_top_.c_str(), version.c_str(), true);
 }
 void MqttManager::publishWifi(int rssi) {
   if (mqtt_.connected())

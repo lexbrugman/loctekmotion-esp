@@ -15,9 +15,11 @@ String versionUrl() {
 
 }  // namespace
 
-void UpdateManager::begin(const char* current_version, LogFn log) {
+void UpdateManager::begin(const char* current_version, LogFn log,
+                          VersionFn on_remote_version) {
   current_version_ = current_version;
   log_ = std::move(log);
+  version_cb_ = std::move(on_remote_version);
 }
 
 void UpdateManager::report(const String& message) {
@@ -31,12 +33,12 @@ void UpdateManager::loop() {
     if (now < cfg::kOtaStartupDelay) return;  // let Wi-Fi/MQTT settle first
     first_check_done_ = true;
     last_check_ = now;
-    checkNow(false);
+    checkVersion();
     return;
   }
   if (now - last_check_ >= cfg::kUpdateCheckInterval) {
     last_check_ = now;
-    checkNow(false);
+    checkVersion();
   }
 }
 
@@ -62,25 +64,32 @@ String UpdateManager::fetchRemoteVersion() {
   return version;
 }
 
-bool UpdateManager::checkNow(bool force) {
+bool UpdateManager::checkVersion() {
   if (WiFi.status() != WL_CONNECTED) {
-    report("update skipped: no Wi-Fi");
+    report("version check skipped: no Wi-Fi");
     return false;
   }
 
-  if (!force) {
-    const String remote = fetchRemoteVersion();
-    if (remote.length() == 0) {
-      return false;  // couldn't determine remote version; try again later
-    }
-    if (remote == current_version_) {
-      report(String("up to date (") + current_version_ + ")");
-      return true;
-    }
-    report(String("updating ") + current_version_ + " -> " + remote);
-  } else {
-    report("forced update: downloading latest firmware");
+  const String remote = fetchRemoteVersion();
+  if (remote.length() == 0) {
+    return false;  // couldn't determine remote version; try again later
   }
+  if (version_cb_) version_cb_(remote);
+  if (remote == current_version_) {
+    report(String("up to date (") + current_version_ + ")");
+  } else {
+    report(String("update available: ") + current_version_ + " -> " + remote);
+  }
+  return true;
+}
+
+bool UpdateManager::install() {
+  if (WiFi.status() != WL_CONNECTED) {
+    report("install skipped: no Wi-Fi");
+    return false;
+  }
+
+  report("installing latest firmware");
 
   auto client = platform::makeSecureClient();
   auto& updater = platform::updater();
