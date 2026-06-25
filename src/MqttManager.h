@@ -17,7 +17,7 @@
 // (and a full discovery re-announce) happen automatically after any drop.
 class MqttManager {
  public:
-  // object = the command id (e.g. "cover", "target", "preset1"); payload = the
+  // object = the command id (e.g. "target", "stop", "preset1"); payload = the
   // raw message payload.
   using CommandHandler = std::function<void(const String& object, const String& payload)>;
 
@@ -27,8 +27,10 @@ class MqttManager {
 
   // --- Telemetry / state publishers (no-ops while disconnected) ---
   void publishHeight(float cm);
-  void publishPosition(int percent);
   void publishTarget(float cm);
+  // Version published on the OTA server, independent of whether it's
+  // installed here — feeds the HA update entity's latest_version.
+  void publishFirmwareLatest(const String& version);
   void publishWifi(int rssi);
   void publishUptime(unsigned long seconds);
   void publishLog(const String& message);
@@ -65,12 +67,12 @@ class MqttManager {
   // Telemetry topics, pre-built once in begin() so the publish hot path (which
   // can run every loop iteration) doesn't concatenate Strings each time.
   String height_top_;
-  String position_top_;
   String target_top_;
+  String fw_latest_top_;
+  String fw_installed_top_;
   String wifi_top_;
   String uptime_top_;
   String log_top_;
-  String ota_channel_top_;
   String childlock_top_;
   String alarm_top_;
   String movement_avail_top_;

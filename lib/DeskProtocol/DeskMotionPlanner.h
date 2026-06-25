@@ -91,6 +91,11 @@ class DeskMotionPlanner {
   // in progress — use this to detect when a seek fully completes.
   bool seeking() const { return seek_.active; }
 
+  // True while pursuing an absolute-height target — the queued/deferred wake
+  // phase plus the active seek and its settling. Distinguishes a slider-
+  // commanded move from continuous / handset / preset motion.
+  bool pursuingTarget() const { return seek_.active || deferred_.active; }
+
   // Fetch the report for the most recently completed seek. Returns each
   // report at most once (one-shot), false when nothing completed since the
   // last call.

@@ -3,7 +3,8 @@
 Lightweight, native firmware for controlling a LoctekMotion / FlexiSpot standing
 desk from a **Wemos D1 mini (ESP8266)** or an **ESP32 dev board**. It talks to
 Home Assistant over **MQTT with auto-discovery**, is provisioned on-device via
-a **captive portal**, and **updates itself over-the-air** from a GitHub release.
+a **captive portal**, and **updates over-the-air** from a GitHub release -
+checked automatically, installed on demand.
 Absolute-height positioning is closed-loop and **self-calibrating**: the
 firmware learns each desk's motion characteristics and remembers them across
 power cycles (see [Height seeking & self-calibration](#height-seeking--self-calibration)).
@@ -45,32 +46,33 @@ serves any number of them. Device name is just the friendly label shown in HA.
 
 | Entity | Type | Notes |
 | --- | --- | --- |
-| Desk | cover | open/close/stop + position (0–100 %) |
-| Target height | number | absolute height in cm |
+| Target height | number | slider, absolute height in cm |
 | Height | sensor | decoded desk height |
-| WiFi signal / Uptime / OTA channel | sensor | diagnostics |
+| WiFi signal / Uptime | sensor | diagnostics |
+| Stop | button | halt any in-progress move |
 | Preset 1/2, Sit, Stand | button | stored positions |
 | Memory, Wake screen | button | |
 | Child lock | switch | tracks the desk's real state (the handset's "LOC" display) |
 | Alarm | switch | sit-stand reminder; tracks the desk's real state (the handset's blinking "=XX" display); off is sent as the 3 s hold the desk requires |
 | Reset calibration | button | wipe the learned motion model (see [below](#height-seeking--self-calibration)) |
-| Firmware update | button | force an OTA check now |
+| Firmware | update | titled with the OTA channel and linked to its release page; Install downloads and flashes the latest |
+| Check for updates | button | re-read the OTA channel's version now instead of waiting for the next poll |
 | Wi-Fi setup | button | reboot into the captive portal |
 | Restart | button | reboot the ESP |
 
 The desk ignores movement commands while child-locked, so every
-movement-related entity (cover, target height, the preset/sit/stand/memory
+movement-related entity (target height, stop, the preset/sit/stand/memory
 buttons and the alarm switch) is marked unavailable - greyed out in HA -
 while the lock is on, rather than silently doing nothing.
 
 ## Height seeking & self-calibration
 
 The desk's protocol has no native "go to height" command - it only streams the
-handset display while moving. Absolute-height moves (the cover position and
-the Target height number) are therefore closed-loop: the firmware drives the
-desk toward the target, predicts how far it will coast after the drive stops,
-and cuts the drive early so the coast lands on the target; any remaining error
-is closed with short correction taps.
+handset display while moving. Absolute-height moves (the Target height slider)
+are therefore closed-loop: the firmware drives the desk toward the target,
+predicts how far it will coast after the drive stops, and cuts the drive early
+so the coast lands on the target; any remaining error is closed with short
+correction taps.
 
 The predictions come from a small per-desk motion model
 ([`lib/DeskProtocol/MotionModel.*`](lib/DeskProtocol)) that learns the desk's
@@ -131,10 +133,12 @@ https://github.com/lexbrugman/loctekmotion-esp/releases/download/master-latest/f
 https://github.com/lexbrugman/loctekmotion-esp/releases/download/master-latest/version.txt           # short commit SHA, shared by both boards
 ```
 
-- On boot and every 6 hours the device fetches `version.txt` and, if it differs
-  from the running build, downloads and flashes its own board's
-  `firmware-*.bin` (`cfg::kFirmwareAsset` - never the other board's, since that
-  would brick it). The **Firmware update** button forces a check immediately.
+- On boot and every 6 hours the device fetches `version.txt` and reports it to
+  the **Firmware** update entity in Home Assistant - it does not install
+  anything on its own. The **Check for updates** button re-reads it on demand
+  instead of waiting for the next poll. Pressing **Install** on the Firmware
+  entity downloads and flashes its own board's `firmware-*.bin`
+  (`cfg::kFirmwareAsset` - never the other board's, since that would brick it).
 - The build version (`-DFW_VERSION`) is the short commit SHA, so the running
   firmware's version always matches the commit it was built from.
 - `kOtaBaseUrl` is built from `FW_OTA_REPO` and `FW_OTA_CHANNEL`, which CI

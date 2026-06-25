@@ -214,6 +214,34 @@ void test_move_to_height_seeks_toward_target_and_stops_on_arrival() {
   TEST_ASSERT_FALSE(p.moving());
 }
 
+void test_pursuing_target_covers_the_deferred_phase() {
+  // pursuingTarget() must be true from the moment a target command lands so the
+  // height slider holds its setpoint immediately — including the deferred wake
+  // window that precedes the live seek, which seeking() alone does not cover.
+  Recorder rec;
+  DeskMotionPlanner p(kMin, kMax, kTiming, kTunables, std::ref(rec));
+
+  TEST_ASSERT_FALSE(p.pursuingTarget());  // idle
+
+  p.moveToHeight(99.0f, 1000, /*has_height=*/false, 0.0f);  // no height -> deferred
+  TEST_ASSERT_TRUE(p.pursuingTarget());   // held from command receipt...
+  TEST_ASSERT_FALSE(p.seeking());         // ...before the seek itself goes live
+
+  p.tick(1100, /*has_height=*/true, /*height=*/80.0f, kFresh);  // report -> seeking
+  TEST_ASSERT_TRUE(p.pursuingTarget());
+  TEST_ASSERT_TRUE(p.seeking());
+}
+
+void test_pursuing_target_clears_on_stop() {
+  Recorder rec;
+  DeskMotionPlanner p(kMin, kMax, kTiming, kTunables, std::ref(rec));
+
+  p.moveToHeight(99.0f, 1000, /*has_height=*/true, /*height=*/80.0f);
+  TEST_ASSERT_TRUE(p.pursuingTarget());
+  p.stop();
+  TEST_ASSERT_FALSE(p.pursuingTarget());  // an interrupting command releases the hold
+}
+
 void test_move_to_height_within_deadband_does_not_move() {
   Recorder rec;
   DeskMotionPlanner p(kMin, kMax, kTiming, kTunables, std::ref(rec));
@@ -691,6 +719,8 @@ int main(int, char**) {
   RUN_TEST(test_continuous_movement_survives_a_stale_report_at_wakeup);
   RUN_TEST(test_continuous_movement_aborts_when_height_reports_go_stale);
   RUN_TEST(test_move_to_height_seeks_toward_target_and_stops_on_arrival);
+  RUN_TEST(test_pursuing_target_covers_the_deferred_phase);
+  RUN_TEST(test_pursuing_target_clears_on_stop);
   RUN_TEST(test_move_to_height_within_deadband_does_not_move);
   RUN_TEST(test_move_to_height_defers_until_a_height_is_known);
   RUN_TEST(test_move_to_height_rewakes_periodically_while_awaiting_report);

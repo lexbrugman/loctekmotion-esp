@@ -10,8 +10,6 @@ DeskController::DeskController(uint8_t rx_pin, uint8_t tx_pin, uint8_t screen_pi
     : serial_(rx_pin, tx_pin),
       screen_pin_(screen_pin),
       baud_(baud),
-      min_height_(min_height),
-      max_height_(max_height),
       planner_(min_height, max_height,
                DeskMotionPlanner::Timing{
                    cfg::kWakeSettle,
@@ -112,14 +110,6 @@ void DeskController::loop() {
   was_seeking_ = seeking;
 }
 
-float DeskController::position() const {
-  if (!decoder_.has_height()) return -1.0f;
-  float frac = (decoder_.height() - min_height_) / (max_height_ - min_height_);
-  if (frac < 0.0f) frac = 0.0f;
-  if (frac > 1.0f) frac = 1.0f;
-  return frac;
-}
-
 void DeskController::send(const desk_cmd::Frame& frame) {
   if (frame.data == nullptr || frame.len == 0) return;
   serial_.stream().write(frame.data, frame.len);
@@ -127,12 +117,6 @@ void DeskController::send(const desk_cmd::Frame& frame) {
 
 void DeskController::moveToHeight(float target_cm) {
   planner_.moveToHeight(target_cm, millis(), decoder_.has_height(), decoder_.height());
-}
-
-void DeskController::moveToPosition(float fraction) {
-  if (fraction < 0.0f) fraction = 0.0f;
-  if (fraction > 1.0f) fraction = 1.0f;
-  moveToHeight(min_height_ + fraction * (max_height_ - min_height_));
 }
 
 void DeskController::childLock() {
