@@ -225,10 +225,15 @@ inline constexpr uint32_t kOtaStartupDelay = 15000;
 #endif
 inline constexpr char kOtaBaseUrl[] =
     "https://github.com/" FW_OTA_REPO "/releases/download/" FW_OTA_CHANNEL;
-// Exposed to Home Assistant as a diagnostic sensor (see MqttManager::announce)
-// so it's visible at a glance which channel — and therefore which branch — a
-// given device is following; handy when a feature-branch build has been
-// flashed onto a test device alongside production ones.
+// Human-viewable release page for the channel (the /tag/ path, vs kOtaBaseUrl's
+// /download/ asset path) — surfaced as the firmware update entity's release_url
+// so the HA update card links straight to the channel this device follows.
+inline constexpr char kOtaReleaseUrl[] =
+    "https://github.com/" FW_OTA_REPO "/releases/tag/" FW_OTA_CHANNEL;
+// Shown as the firmware update entity's title, so it's visible at a glance
+// which channel — and therefore which branch — a given device follows; handy
+// when a feature-branch build has been flashed onto a test device alongside
+// production ones.
 inline constexpr char kOtaChannel[] = FW_OTA_CHANNEL;
 // Each board gets its own asset name (CI publishes one binary per board to
 // every channel) so a device can never fetch and flash another board's image

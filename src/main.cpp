@@ -47,7 +47,8 @@ uint32_t last_telemetry = 0;
 
 // Deferred (heavy/terminal) actions, run from loop() rather than the MQTT
 // callback to avoid reentrancy and watchdog resets.
-bool want_forced_update = false;
+bool want_install = false;
+bool want_check_update = false;
 bool want_restart = false;
 bool want_wifi_reset = false;
 bool want_calibration_reset = false;
@@ -218,7 +219,9 @@ void handleCommand(const String& object, const String& payload) {
   } else if (object == "calibration_reset") {
     want_calibration_reset = true;
   } else if (object == "update") {
-    want_forced_update = true;
+    want_install = true;
+  } else if (object == "check_update") {
+    want_check_update = true;
   } else if (object == "configure") {
     want_wifi_reset = true;
   } else if (object == "restart") {
@@ -335,7 +338,7 @@ void setup() {
     Serial.print(F("[ota] "));
     Serial.println(m);
     mqtt.publishLog(m);
-  });
+  }, [](const String& v) { mqtt.publishFirmwareLatest(v); });
 
   // Fetch the current height once at boot.
   desk.wakeScreen();
@@ -366,9 +369,13 @@ void loop() {
     calibration_pending = true;
     mqtt.publishLog("calibration reset; starting fresh from seed margins");
   }
-  if (want_forced_update) {
-    want_forced_update = false;
-    updater.checkNow(true);  // reboots on success
+  if (want_check_update) {
+    want_check_update = false;
+    updater.checkVersion();  // refreshes the Firmware entity; never installs
+  }
+  if (want_install) {
+    want_install = false;
+    updater.install();  // reboots on success
   }
   if (want_wifi_reset) {
     want_wifi_reset = false;

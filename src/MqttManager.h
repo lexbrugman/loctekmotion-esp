@@ -28,6 +28,9 @@ class MqttManager {
   // --- Telemetry / state publishers (no-ops while disconnected) ---
   void publishHeight(float cm);
   void publishTarget(float cm);
+  // Version published on the OTA server, independent of whether it's
+  // installed here — feeds the HA update entity's latest_version.
+  void publishFirmwareLatest(const String& version);
   void publishWifi(int rssi);
   void publishUptime(unsigned long seconds);
   void publishLog(const String& message);
@@ -65,10 +68,11 @@ class MqttManager {
   // can run every loop iteration) doesn't concatenate Strings each time.
   String height_top_;
   String target_top_;
+  String fw_latest_top_;
+  String fw_installed_top_;
   String wifi_top_;
   String uptime_top_;
   String log_top_;
-  String ota_channel_top_;
   String childlock_top_;
   String alarm_top_;
   String movement_avail_top_;
