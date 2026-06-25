@@ -45,10 +45,10 @@ serves any number of them. Device name is just the friendly label shown in HA.
 
 | Entity | Type | Notes |
 | --- | --- | --- |
-| Desk | cover | open/close/stop + position (0–100 %) |
-| Target height | number | absolute height in cm |
+| Target height | number | slider, absolute height in cm |
 | Height | sensor | decoded desk height |
 | WiFi signal / Uptime / OTA channel | sensor | diagnostics |
+| Stop | button | halt any in-progress move |
 | Preset 1/2, Sit, Stand | button | stored positions |
 | Memory, Wake screen | button | |
 | Child lock | switch | tracks the desk's real state (the handset's "LOC" display) |
@@ -59,18 +59,18 @@ serves any number of them. Device name is just the friendly label shown in HA.
 | Restart | button | reboot the ESP |
 
 The desk ignores movement commands while child-locked, so every
-movement-related entity (cover, target height, the preset/sit/stand/memory
+movement-related entity (target height, stop, the preset/sit/stand/memory
 buttons and the alarm switch) is marked unavailable - greyed out in HA -
 while the lock is on, rather than silently doing nothing.
 
 ## Height seeking & self-calibration
 
 The desk's protocol has no native "go to height" command - it only streams the
-handset display while moving. Absolute-height moves (the cover position and
-the Target height number) are therefore closed-loop: the firmware drives the
-desk toward the target, predicts how far it will coast after the drive stops,
-and cuts the drive early so the coast lands on the target; any remaining error
-is closed with short correction taps.
+handset display while moving. Absolute-height moves (the Target height slider)
+are therefore closed-loop: the firmware drives the desk toward the target,
+predicts how far it will coast after the drive stops, and cuts the drive early
+so the coast lands on the target; any remaining error is closed with short
+correction taps.
 
 The predictions come from a small per-desk motion model
 ([`lib/DeskProtocol/MotionModel.*`](lib/DeskProtocol)) that learns the desk's

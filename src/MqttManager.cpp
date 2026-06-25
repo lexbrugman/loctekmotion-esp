@@ -38,7 +38,6 @@ void MqttManager::begin(const DeviceConfig& config, CommandHandler handler) {
   avail_top_ = base_ + "/status";
   cmd_prefix_ = base_ + "/cmd/";
   height_top_ = base_ + "/height";
-  position_top_ = base_ + "/position";
   target_top_ = base_ + "/target";
   wifi_top_ = base_ + "/wifi";
   uptime_top_ = base_ + "/uptime";
@@ -90,8 +89,9 @@ void MqttManager::announce() {
   // --- Sensors ---
   publishDiscoveryEntity(
       "sensor", "height", "Height",
-      "\"state_topic\":\"" + base_ +
-          "/height\",\"unit_of_measurement\":\"cm\",\"device_class\":\"distance\","
+      "\"state_topic\":\"" + base_ + "/height\",\"unit_of_measurement\":\"" +
+          cfg::kHeightUnit +
+          "\",\"device_class\":\"distance\","
           "\"state_class\":\"measurement\",\"suggested_display_precision\":1,"
           "\"icon\":\"mdi:desk\"");
   publishDiscoveryEntity(
@@ -119,40 +119,26 @@ void MqttManager::announce() {
   // Six diagnostic sensors fed from one retained JSON topic, for watching the
   // per-desk calibration converge. Off by default in HA — opt-in via the
   // entity registry, since they're debugging aids rather than daily-use state.
-  struct Cal { const char* key; const char* name; const char* unit; };
+  // unit_suffix is appended to kHeightUnit so every height-derived unit traces
+  // back to the one constant (cm -> cm/s, cm/s²).
+  struct Cal { const char* key; const char* name; const char* unit_suffix; };
   static const Cal cal_sensors[] = {
-      {"terminal_speed_up", "Cruise speed up", "cm/s"},
-      {"terminal_speed_down", "Cruise speed down", "cm/s"},
-      {"decel_up", "Coast deceleration up", "cm/s²"},
-      {"decel_down", "Coast deceleration down", "cm/s²"},
-      {"tap_gain_up", "Tap gain up", "cm/s²"},
-      {"tap_gain_down", "Tap gain down", "cm/s²"},
+      {"terminal_speed_up", "Cruise speed up", "/s"},
+      {"terminal_speed_down", "Cruise speed down", "/s"},
+      {"decel_up", "Coast deceleration up", "/s²"},
+      {"decel_down", "Coast deceleration down", "/s²"},
+      {"tap_gain_up", "Tap gain up", "/s²"},
+      {"tap_gain_down", "Tap gain down", "/s²"},
   };
   for (const auto& c : cal_sensors) {
     publishDiscoveryEntity(
         "sensor", c.key, c.name,
         "\"state_topic\":\"" + calibration_top_ + "\",\"value_template\":\"{{ value_json." +
-            c.key + " }}\",\"unit_of_measurement\":\"" + c.unit +
+            c.key + " }}\",\"unit_of_measurement\":\"" + String(cfg::kHeightUnit) + c.unit_suffix +
             "\",\"state_class\":\"measurement\",\"suggested_display_precision\":2,"
             "\"entity_category\":\"diagnostic\",\"enabled_by_default\":false,"
             "\"icon\":\"mdi:tune-variant\"");
   }
-
-  // --- Cover (position-based) ---
-  // Gated on movement_avail_top_: the desk ignores movement commands while
-  // child-locked, so grey this out rather than let it silently do nothing.
-  // name:null + has_entity_name: this entity *is* the device, so it should
-  // show up as just the device's name (e.g. "Study desk") rather than
-  // "<device name> Desk".
-  publishDiscoveryEntity(
-      "cover", "desk", nullptr,
-      "\"has_entity_name\":true,\"command_topic\":\"" + base_ +
-          "/cmd/cover\",\"payload_open\":\"OPEN\","
-      "\"payload_close\":\"CLOSE\",\"payload_stop\":\"STOP\",\"position_topic\":\"" +
-          base_ + "/position\",\"set_position_topic\":\"" + base_ +
-          "/cmd/position\",\"position_open\":100,\"position_closed\":0,"
-          "\"device_class\":\"blind\",\"icon\":\"mdi:desk\"",
-      movement_avail_top_);
 
   // --- Number (absolute target height) ---
   publishDiscoveryEntity(
@@ -160,8 +146,9 @@ void MqttManager::announce() {
       "\"command_topic\":\"" + base_ + "/cmd/target\",\"state_topic\":\"" +
           base_ + "/target\",\"min\":" + String(cfg::kMinHeight, 1) +
           ",\"max\":" + String(cfg::kMaxHeight, 1) +
-          ",\"step\":0.1,\"unit_of_measurement\":\"cm\",\"device_class\":"
-          "\"distance\",\"mode\":\"box\",\"icon\":\"mdi:arrow-up-down\"",
+          ",\"step\":0.1,\"unit_of_measurement\":\"" + cfg::kHeightUnit +
+          "\",\"device_class\":\"distance\",\"mode\":\"slider\",\"icon\":"
+          "\"mdi:arrow-up-down\"",
       movement_avail_top_);
 
   // --- Switches ---
@@ -183,9 +170,12 @@ void MqttManager::announce() {
 
   // --- Buttons ---
   // movement: true for buttons that issue movement commands the desk ignores
-  // while child-locked (gated on movement_avail_top_, like the cover/number).
+  // while child-locked (gated on movement_avail_top_, like the number).
   struct Btn { const char* obj; const char* name; const char* icon; bool cfg_cat; bool movement; };
   static const Btn buttons[] = {
+      // Halts any in-progress move from HA — a slider seek, a preset, or a
+      // continuous drive the desk is already executing.
+      {"stop", "Stop", "mdi:stop", false, true},
       {"preset1", "Preset 1", "mdi:numeric-1-box", false, true},
       {"preset2", "Preset 2", "mdi:numeric-2-box", false, true},
       {"sit", "Sit", "mdi:chair-rolling", false, true},
@@ -261,10 +251,6 @@ void MqttManager::onMessage(char* topic, const uint8_t* payload, unsigned int le
 void MqttManager::publishHeight(float cm) {
   if (mqtt_.connected())
     mqtt_.publish(height_top_.c_str(), String(cm, 1).c_str(), true);
-}
-void MqttManager::publishPosition(int percent) {
-  if (mqtt_.connected())
-    mqtt_.publish(position_top_.c_str(), String(percent).c_str(), true);
 }
 void MqttManager::publishTarget(float cm) {
   if (mqtt_.connected())

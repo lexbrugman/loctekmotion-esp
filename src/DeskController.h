@@ -42,19 +42,13 @@ class DeskController {
   bool has_height() const { return decoder_.has_height(); }
   float height() const { return decoder_.height(); }
 
-  // Position as a 0..1 fraction of travel (min..max). Returns -1 if unknown.
-  float position() const;
-
-  // --- Continuous movement (cover open/close/stop) ---
-  void moveUp() { planner_.moveUp(millis()); }
-  void moveDown() { planner_.moveDown(millis()); }
   void stop() { planner_.stop(); }
   bool moving() const { return planner_.moving(); }
+  // True while driving to a slider-commanded absolute height (see planner).
+  bool pursuingTarget() const { return planner_.pursuingTarget(); }
 
   // --- Go to an absolute height (cm), clamped to the configured range ---
   void moveToHeight(float target_cm);
-  // --- Go to a 0..1 position fraction ---
-  void moveToPosition(float fraction);
 
   // --- One-shot commands (wake handled automatically) ---
   void preset1() { issue(desk_cmd::Preset1); }
@@ -91,8 +85,6 @@ class DeskController {
   DeskUart serial_;
   uint8_t screen_pin_;
   uint32_t baud_;
-  float min_height_;
-  float max_height_;
 
   DeskHeightDecoder decoder_;
   HeightCallback height_cb_;

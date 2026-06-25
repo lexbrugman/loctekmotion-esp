@@ -113,6 +113,9 @@ void publishSeekReport(const DeskController::SeekReport& r) {
   m += "s";
   mqtt.publishLog(m);
   calibration_pending = true;  // the seek's learning updates just landed
+  // Hand the slider off from the held setpoint to where the desk actually
+  // settled, so the thumb reflects the real final height once the seek ends.
+  mqtt.publishTarget(r.settled_height);
 }
 
 // The desk streams its display ~9x/s while moving, mostly repeating the same
@@ -123,8 +126,11 @@ void publishHeightState(float cm) {
   if (!mqtt.connected() || cm == last_published_height) return;
   last_published_height = cm;
   mqtt.publishHeight(cm);
-  const float frac = desk.position();
-  if (frac >= 0.0f) mqtt.publishPosition(static_cast<int>(lroundf(frac * 100.0f)));
+  // The height slider follows the live height except while driving to a
+  // slider-set target, where it holds at the setpoint echoed by
+  // handleCommand("target") — so a manual change sticks while presets, the
+  // handset or the wall panel make the thumb track the desk.
+  if (!desk.pursuingTarget()) mqtt.publishTarget(cm);
 }
 
 // Switch state trackers (see OptimisticSwitch): retained publish-on-change,
@@ -173,12 +179,8 @@ bool parseFloat(const String& payload, float& out) {
 
 void handleCommand(const String& object, const String& payload) {
   float value = 0.0f;
-  if (object == "cover") {
-    if (payload == "OPEN") desk.moveUp();
-    else if (payload == "CLOSE") desk.moveDown();
-    else if (payload == "STOP") desk.stop();
-  } else if (object == "position") {
-    if (parseFloat(payload, value)) desk.moveToPosition(value / 100.0f);
+  if (object == "stop") {
+    desk.stop();
   } else if (object == "target") {
     if (parseFloat(payload, value)) {
       desk.moveToHeight(value);
