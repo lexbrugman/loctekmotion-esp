@@ -6,6 +6,7 @@
 
 #include "ConfigStore.h"
 #include "DeskController.h"
+#include "DeviceId.h"
 #include "MqttManager.h"
 #include "OptimisticSwitch.h"
 #include "Platform.h"
@@ -15,17 +16,6 @@
 namespace {
 
 DeviceConfig config;
-
-// Discovery topics, the MQTT client id and the HA device identifier are all
-// keyed off device_id, so it must stay safe for use as an MQTT topic segment.
-// Lower-case it and replace anything outside [a-z0-9_] with '_' — silently
-// fixing fat-fingered portal input rather than producing a broken namespace.
-void sanitizeDeviceId(char* id) {
-  for (char* c = id; *c; ++c) {
-    if (*c >= 'A' && *c <= 'Z') *c += 'a' - 'A';
-    else if (!((*c >= 'a' && *c <= 'z') || (*c >= '0' && *c <= '9') || *c == '_')) *c = '_';
-  }
-}
 
 // SSID for the provisioning AP: kPortalSsidPrefix plus the last 3 bytes of the
 // MAC address (lower-case hex, no separators) — short, always-available, and
@@ -249,7 +239,7 @@ void provision() {
   WiFiManager wm;
   // Reflects whatever device_id is in effect when this boot started; a change
   // saved during this run's portal session takes effect on the next reboot.
-  wm.setHostname(config.device_id);
+  wm.setHostname(deviceHostname(config.device_id).c_str());
   wm.setConfigPortalTimeout(cfg::kPortalTimeout);
 
   WiFiManagerParameter p_id(
