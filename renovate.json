@@ -1,0 +1,18 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "dependencyDashboard": false,
+  "baseBranchPatterns": ["dev"],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^platformio\\.ini$/"],
+      "datasourceTemplate": "github-tags",
+      "extractVersionTemplate": "^v?(?<version>.+)$",
+      "matchStrings": [
+        "; renovate: depName=(?<depName>\\S+)\\s+platform\\s*=\\s*[^@\\s]+@(?<currentValue>\\S+)",
+        "\\n\\s+(?<depName>[\\w.-]+/[\\w.-]+)@(?<currentValue>\\^?[0-9][^\\s]*)"
+      ]
+    }
+  ]
+}
