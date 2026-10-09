@@ -8,17 +8,28 @@ on:
 permissions:
   contents: read
 
+# A superseded run must never finish last and replace a newer rolling release.
+# Manual runs do not publish, so they get their own group and can neither
+# cancel nor displace a push run. cleanup.yml joins the push group so pruning
+# never races a build for the branch.
+concurrency:
+  group: firmware-${{ github.event_name == 'workflow_dispatch' && 'manual-' || '' }}${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     name: Unit tests (host)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+
       - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
+
       - name: Install PlatformIO
         run: pip install --upgrade platformio
+
       - name: Run host-side unit tests
         run: pio test -e native
 
@@ -33,9 +44,11 @@ jobs:
       version: ${{ steps.ver.outputs.version }}
     steps:
       - uses: actions/checkout@v7
+
       - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
+
       - name: Cache PlatformIO
         uses: actions/cache@v6
         with:
@@ -43,6 +56,7 @@ jobs:
             ~/.platformio
             ~/.cache/pip
           key: pio-${{ runner.os }}-${{ matrix.env }}-${{ hashFiles('platformio.ini') }}
+
       - name: Install PlatformIO
         run: pip install --upgrade platformio
 
@@ -80,7 +94,7 @@ jobs:
 
   publish:
     name: Publish rolling release (OTA channel)
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && github.ref_type == 'branch'
     needs: build
     runs-on: ubuntu-latest
     permissions:
@@ -89,6 +103,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v7
+
       - name: Download builds
         uses: actions/download-artifact@v8
         with:
@@ -96,9 +111,8 @@ jobs:
           path: dist
           merge-multiple: true
 
-      # Each branch gets its own rolling "<branch>-latest" tag/release that CI
-      # overwrites on every push, with one binary per board attached. Devices
-      # poll a fixed channel URL for their own board's asset, e.g.
+      # Devices poll a fixed per-branch channel URL for their own board's
+      # asset, e.g.
       #   .../releases/download/master-latest/firmware-d1_mini.bin
       # so OTA always serves the newest build for the branch they track —
       # production devices follow "master-latest", test devices can be pointed
@@ -142,6 +156,8 @@ jobs:
         run: |
           stamp="$(TZ=UTC git show -s --format=%cd --date=format-local:%Y%m%d-%H%M%S "$GITHUB_SHA")"
           tag="${GITHUB_REF_NAME//\//-}-$stamp-${{ needs.build.outputs.version }}"
+          # A re-run for the same commit replaces its own archive.
+          gh release delete "$tag" --yes --cleanup-tag --repo "$GITHUB_REPOSITORY" || true
           gh release create "$tag" dist/*.bin dist/version.txt \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
