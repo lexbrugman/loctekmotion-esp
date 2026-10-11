@@ -80,10 +80,21 @@ jobs:
       # The asset name embeds the board (must match cfg::kFirmwareAsset) so a
       # device only ever fetches the image built for it; version.txt is board-
       # independent (it's just the commit SHA both boards were built from).
+      # firmware-<board>.bin is the app-only image OTA flashes; firmware-
+      # <board>-full.bin is flashable at 0x0 for a first USB install. On
+      # ESP8266 the app image already is that (the bootloader is embedded),
+      # so it's published under both names; ESP32 envs build a merged image
+      # (scripts/merge_full_image.py).
       - name: Stage release assets
         run: |
           mkdir -p dist
-          cp .pio/build/${{ matrix.env }}/firmware.bin dist/firmware-${{ matrix.env }}.bin
+          build=.pio/build/${{ matrix.env }}
+          cp $build/firmware.bin dist/firmware-${{ matrix.env }}.bin
+          if [ -f $build/firmware-full.bin ]; then
+            cp $build/firmware-full.bin dist/firmware-${{ matrix.env }}-full.bin
+          else
+            cp $build/firmware.bin dist/firmware-${{ matrix.env }}-full.bin
+          fi
           echo -n "${{ steps.ver.outputs.version }}" > dist/version.txt
 
       - name: Upload build artifact

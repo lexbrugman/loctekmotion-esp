@@ -124,13 +124,22 @@ pio test -e native
 
 CI builds and tests both boards on every push and pull request (see
 [`firmware.yml`](.github/workflows/firmware.yml)), and publishes a **rolling
-release** tagged `<branch>-latest` - overwritten on each build, with one binary
-per board attached - that's the OTA channel devices poll:
+release** tagged `<branch>-latest` - overwritten on each build, with two
+binaries per board attached - that's the OTA channel devices poll:
 
 ```
 https://github.com/lexbrugman/loctekmotion-esp/releases/download/master-latest/firmware-d1_mini.bin
 https://github.com/lexbrugman/loctekmotion-esp/releases/download/master-latest/firmware-esp32dev.bin
 https://github.com/lexbrugman/loctekmotion-esp/releases/download/master-latest/version.txt           # short commit SHA, shared by both boards
+```
+
+`firmware-<board>.bin` is the app-only image OTA flashes. Each board also gets
+a `firmware-<board>-full.bin` for a first install over USB without building
+from source - it includes the bootloader and partition table, so flash it at
+offset 0x0:
+
+```bash
+esptool.py write_flash 0x0 firmware-esp32dev-full.bin
 ```
 
 - On boot and every 6 hours the device fetches `version.txt` and reports it to
