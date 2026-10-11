@@ -4,6 +4,7 @@
 #include <PubSubClient.h>
 
 #include <functional>
+#include <vector>
 
 #include "ConfigStore.h"
 #include "MotionModel.h"
@@ -12,6 +13,10 @@
 // MqttManager owns the broker connection and the Home Assistant integration:
 // Last-Will availability, retained MQTT discovery for every entity, telemetry
 // publishing, and routing of inbound command topics to a single handler.
+//
+// Retained discovery configs under this device's node ID that the running
+// firmware did not publish are for entities it doesn't define; they are
+// deleted on connect so Home Assistant removes those entities.
 //
 // It is fully non-blocking: begin() once, loop() every iteration. Reconnects
 // (and a full discovery re-announce) happen automatically after any drop.
@@ -32,7 +37,6 @@ class MqttManager {
   // installed here — feeds the HA update entity's latest_version.
   void publishFirmwareLatest(const String& version);
   void publishWifi(int rssi);
-  void publishUptime(unsigned long seconds);
   void publishLog(const String& message);
   void publishChildLock(bool locked);
   void publishAlarm(bool on);
@@ -52,6 +56,11 @@ class MqttManager {
                               const char* name, const String& specifics,
                               const String& extra_availability_topic = "");
   void onMessage(char* topic, const uint8_t* payload, unsigned int length);
+  // subtopic is the topic below cfg::kDiscoveryPrefix.
+  void onDiscoveryMessage(const String& subtopic, const uint8_t* payload,
+                          unsigned int length);
+  // Publishes the uptime once uptime_due_ passes; see announce().
+  void publishUptimeIfDue();
 
   WiFiClient net_;
   PubSubClient mqtt_{net_};
@@ -59,6 +68,12 @@ class MqttManager {
   DeviceConfig config_;
   uint32_t last_attempt_ = 0;
   bool first_attempt_ = true;
+
+  // "<component>/<object>" of every discovery config published since
+  // connecting; any other retained config under this node ID is deleted.
+  std::vector<String> published_;
+  bool uptime_pending_ = false;
+  uint32_t uptime_due_ = 0;  // millis()
 
   String base_;        // cfg::kTopicNamespace + "/" + config_.device_id
   String avail_top_;   // base_ + "/status"
@@ -71,7 +86,7 @@ class MqttManager {
   String fw_latest_top_;
   String fw_installed_top_;
   String wifi_top_;
-  String uptime_top_;
+  String uptime_top_;  // seconds since boot, see publishUptimeIfDue()
   String log_top_;
   String childlock_top_;
   String alarm_top_;

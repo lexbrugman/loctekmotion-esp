@@ -45,6 +45,10 @@ inline auto& updater() {
 // validation is intentionally skipped (see UpdateManager.cpp for why).
 std::unique_ptr<SecureClient> makeSecureClient();
 
+// Seconds since boot, from a 64-bit microsecond clock so it doesn't wrap the
+// way the 32-bit millis() does after 49.7 days.
+uint64_t uptimeSeconds();
+
 // A single persistent flag backed by RTC memory: it survives a software or
 // external (RST-button) reset, but — unlike flash-backed storage — is wiped
 // by a power loss. That's exactly the distinction main.cpp's double-reset
