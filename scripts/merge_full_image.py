@@ -12,7 +12,7 @@ def merge_full_image(source, target, env):
         images += [offset, env.subst(image)]
     images += [env.subst("$ESP32_APP_OFFSET"), str(target[0])]
     env.Execute(" ".join([
-        '"$PYTHONEXE"', '"$OBJCOPY"',
+        '"$OBJCOPY"',  # a native esptool binary since platform-espressif32 v8
         "--chip", env.BoardConfig().get("build.mcu"),
         "merge_bin", "-o", '"$BUILD_DIR/firmware-full.bin"',
     ] + ['"%s"' % i for i in images]))
