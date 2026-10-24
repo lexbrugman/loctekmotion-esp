@@ -19,9 +19,9 @@ concurrency:
 jobs:
   test:
     name: Unit tests (host)
-    # A same-repo PR's head commit already gets a push run (which the PR shows
-    # too), so only PRs from forks need their own; skipping here skips "build"
-    # as well.
+    # A same-repo PR's head commit already gets a push run, whose checks the PR
+    # shows too, so only PRs from forks need a run of their own. "build"
+    # repeats this condition.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
     steps:
@@ -40,6 +40,8 @@ jobs:
   build:
     name: Build firmware (${{ matrix.env }})
     needs: test
+    # Same condition as "test".
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
     strategy:
       matrix:
