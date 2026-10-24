@@ -1,5 +1,9 @@
 #include "Platform.h"
 
+#if defined(ESP32)
+#include <esp_timer.h>
+#endif
+
 namespace {
 
 // Arbitrary non-zero marker: RTC memory powers up with unpredictable content
@@ -39,6 +43,14 @@ void writeResetFlag(bool set) {
   ESP.rtcUserMemoryWrite(kRtcSlot, &value, sizeof(value));
 #else
   g_reset_flag = value;
+#endif
+}
+
+uint64_t uptimeSeconds() {
+#if defined(ESP8266)
+  return micros64() / 1000000;
+#else
+  return esp_timer_get_time() / 1000000;
 #endif
 }
 

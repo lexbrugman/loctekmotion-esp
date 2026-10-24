@@ -193,7 +193,10 @@ inline constexpr uint32_t kAlarmToggleSettle =
 // extra hardware.
 inline constexpr uint32_t kDoubleResetWindow = 4000;
 
-inline constexpr uint32_t kTelemetryInterval = 30000;  // wifi/uptime publish
+inline constexpr uint32_t kTelemetryInterval = 30000;  // wifi signal publish
+// Time Home Assistant gets to set up the entities after discovery, or after
+// it (re)starts, before the device publishes state HA has to receive.
+inline constexpr uint32_t kHaSettleDelay = 5000;
 inline constexpr uint32_t kMqttRetryInterval = 5000;
 inline constexpr uint32_t kWifiRetryInterval = 10000;
 // Grace period before a restart/Wi-Fi-reset takes effect, so the "restarting"

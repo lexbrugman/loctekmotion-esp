@@ -60,6 +60,7 @@ void MqttManager::begin(const DeviceConfig& config, CommandHandler handler) {
 void MqttManager::loop() {
   if (mqtt_.connected()) {
     mqtt_.loop();
+    publishUptimeIfDue();
     return;
   }
   const uint32_t now = millis();
@@ -84,6 +85,7 @@ bool MqttManager::reconnect() {
 }
 
 void MqttManager::announce() {
+  published_.clear();
   mqtt_.publish(avail_top_.c_str(), "online", true);
   mqtt_.subscribe((base_ + "/cmd/#").c_str());
 
@@ -101,12 +103,15 @@ void MqttManager::announce() {
           "/wifi\",\"unit_of_measurement\":\"dBm\",\"device_class\":\"signal_"
           "strength\",\"state_class\":\"measurement\",\"entity_category\":"
           "\"diagnostic\"");
+  // The device has no clock, so it publishes its uptime and HA turns that
+  // into the moment it restarted. Only sent on connect and when HA restarts
+  // (see publishUptimeIfDue), so the state changes only on a restart.
   publishDiscoveryEntity(
-      "sensor", "uptime", "Uptime",
-      "\"state_topic\":\"" + base_ +
-          "/uptime\",\"unit_of_measurement\":\"s\",\"device_class\":\"duration\","
-          "\"state_class\":\"total_increasing\",\"entity_category\":"
-          "\"diagnostic\",\"icon\":\"mdi:timer-outline\"");
+      "sensor", "last_restart", "Last restart",
+      "\"state_topic\":\"" + uptime_top_ +
+          "\",\"device_class\":\"timestamp\",\"entity_category\":"
+          "\"diagnostic\",\"value_template\":\"{{ (now() - "
+          "timedelta(seconds=value|int)).replace(microsecond=0).isoformat() }}\"");
 
   // --- Motion calibration (learned kinematics; see MotionModel) ---
   // Six diagnostic sensors fed from one retained JSON topic, for watching the
@@ -208,6 +213,17 @@ void MqttManager::announce() {
     publishDiscoveryEntity("button", b.obj, b.name, spec,
                            b.movement ? movement_avail_top_ : String());
   }
+
+  // After every publishDiscoveryEntity() above: subscribing replays all
+  // retained configs under this node ID, and onDiscoveryMessage() deletes
+  // the ones not in published_.
+  mqtt_.subscribe((String(cfg::kDiscoveryPrefix) + "/+/" + config_.device_id +
+                   "/+/config").c_str());
+  // HA's birth message, see onDiscoveryMessage().
+  mqtt_.subscribe((String(cfg::kDiscoveryPrefix) + "/status").c_str());
+
+  uptime_pending_ = true;
+  uptime_due_ = millis() + cfg::kHaSettleDelay;
 }
 
 void MqttManager::publishDiscoveryEntity(const char* component, const char* object,
@@ -244,11 +260,18 @@ void MqttManager::publishDiscoveryEntity(const char* component, const char* obje
   payload += "}";
 
   mqtt_.publish(topic.c_str(), payload.c_str(), true);
+  published_.push_back(String(component) + "/" + object);
 }
 
 void MqttManager::onMessage(char* topic, const uint8_t* payload, unsigned int length) {
-  if (!handler_) return;
   String t(topic);
+  const String discovery_prefix = String(cfg::kDiscoveryPrefix) + "/";
+  if (t.startsWith(discovery_prefix)) {
+    onDiscoveryMessage(t.substring(discovery_prefix.length()), payload, length);
+    return;
+  }
+
+  if (!handler_) return;
   if (!t.startsWith(cmd_prefix_)) return;
   String object = t.substring(cmd_prefix_.length());
 
@@ -259,6 +282,50 @@ void MqttManager::onMessage(char* topic, const uint8_t* payload, unsigned int le
   msg.concat(reinterpret_cast<const char*>(payload), length);
 
   handler_(object, msg);
+}
+
+void MqttManager::onDiscoveryMessage(const String& subtopic, const uint8_t* payload,
+                                     unsigned int length) {
+  if (subtopic == "status") {
+    // HA's birth message: it has (re)started and lost the restart time.
+    if (length == 6 && memcmp(payload, "online", 6) == 0) {
+      uptime_pending_ = true;
+      uptime_due_ = millis() + cfg::kHaSettleDelay;
+    }
+    return;
+  }
+
+  // An empty config is a deletion, possibly our own.
+  if (length == 0) return;
+
+  // <component>/<node id>/<object>/config
+  const int node_start = subtopic.indexOf('/') + 1;
+  const int object_start = subtopic.indexOf('/', node_start) + 1;
+  const int config_start = subtopic.indexOf('/', object_start);
+  if (node_start <= 0 || object_start <= 0 || config_start < 0) return;
+  if (subtopic.substring(config_start) != "/config") return;
+  if (subtopic.substring(node_start, object_start - 1) != config_.device_id) return;
+
+  const String component = subtopic.substring(0, node_start - 1);
+  const String object = subtopic.substring(object_start, config_start);
+  for (const String& entity : published_)
+    if (entity == component + "/" + object) return;
+
+  // topic/payload point into PubSubClient's buffer, which publishing reuses;
+  // subtopic is a copy, so it's safe to build the topic from it.
+  const String topic = String(cfg::kDiscoveryPrefix) + "/" + subtopic;
+  mqtt_.publish(topic.c_str(), "", true);
+  Serial.printf("[mqtt] removed retired HA entity %s/%s\n", component.c_str(),
+                object.c_str());
+}
+
+// Not retained: HA converts the uptime to a timestamp using the time it
+// receives it, so a replayed value would give the wrong restart time.
+void MqttManager::publishUptimeIfDue() {
+  if (!uptime_pending_ || static_cast<int32_t>(millis() - uptime_due_) < 0) return;
+  uptime_pending_ = false;
+  mqtt_.publish(uptime_top_.c_str(),
+                String(static_cast<unsigned long>(platform::uptimeSeconds())).c_str(), false);
 }
 
 // --- Publishers ---
@@ -277,10 +344,6 @@ void MqttManager::publishFirmwareLatest(const String& version) {
 void MqttManager::publishWifi(int rssi) {
   if (mqtt_.connected())
     mqtt_.publish(wifi_top_.c_str(), String(rssi).c_str(), true);
-}
-void MqttManager::publishUptime(unsigned long seconds) {
-  if (mqtt_.connected())
-    mqtt_.publish(uptime_top_.c_str(), String(seconds).c_str(), true);
 }
 void MqttManager::publishLog(const String& message) {
   if (mqtt_.connected()) mqtt_.publish(log_top_.c_str(), message.c_str());

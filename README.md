@@ -48,7 +48,8 @@ serves any number of them. Device name is just the friendly label shown in HA.
 | --- | --- | --- |
 | Target height | number | slider, absolute height in cm |
 | Height | sensor | decoded desk height |
-| WiFi signal / Uptime | sensor | diagnostics |
+| WiFi signal | sensor | diagnostic |
+| Last restart | sensor | diagnostic; when the device last restarted |
 | Stop | button | halt any in-progress move |
 | Preset 1/2, Sit, Stand | button | stored positions |
 | Memory, Wake screen | button | |
@@ -59,6 +60,17 @@ serves any number of them. Device name is just the friendly label shown in HA.
 | Check for updates | button | re-read the OTA channel's version now instead of waiting for the next poll |
 | Wi-Fi setup | button | reboot into the captive portal |
 | Restart | button | reboot the ESP |
+
+The device has no clock, so for **Last restart** it publishes its uptime and
+Home Assistant converts that into a timestamp. It sends it only when it
+connects and when Home Assistant restarts, so the entity's state changes only
+on a restart.
+
+Entities removed from the firmware disappear from Home Assistant on their own:
+after connecting, the device deletes any retained discovery config under its
+Device ID that it didn't publish itself. Keep the Device ID specific to the
+desk - another device publishing discovery under the same ID would lose its
+entities too.
 
 The desk ignores movement commands while child-locked, so every
 movement-related entity (target height, stop, the preset/sit/stand/memory
@@ -124,13 +136,22 @@ pio test -e native
 
 CI builds and tests both boards on every push and pull request (see
 [`firmware.yml`](.github/workflows/firmware.yml)), and publishes a **rolling
-release** tagged `<branch>-latest` - overwritten on each build, with one binary
-per board attached - that's the OTA channel devices poll:
+release** tagged `<branch>-latest` - overwritten on each build, with two
+binaries per board attached - that's the OTA channel devices poll:
 
 ```
 https://github.com/lexbrugman/loctekmotion-esp/releases/download/master-latest/firmware-d1_mini.bin
 https://github.com/lexbrugman/loctekmotion-esp/releases/download/master-latest/firmware-esp32dev.bin
 https://github.com/lexbrugman/loctekmotion-esp/releases/download/master-latest/version.txt           # short commit SHA, shared by both boards
+```
+
+`firmware-<board>.bin` is the app-only image OTA flashes. Each board also gets
+a `firmware-<board>-full.bin` for a first install over USB without building
+from source - it includes the bootloader and partition table, so flash it at
+offset 0x0:
+
+```bash
+esptool.py write_flash 0x0 firmware-esp32dev-full.bin
 ```
 
 - On boot and every 6 hours the device fetches `version.txt` and reports it to

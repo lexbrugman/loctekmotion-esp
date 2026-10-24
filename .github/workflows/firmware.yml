@@ -8,23 +8,40 @@ on:
 permissions:
   contents: read
 
+# A superseded run must never finish last and replace a newer rolling release.
+# Manual runs do not publish, so they get their own group and can neither
+# cancel nor displace a push run. cleanup.yml joins the push group so pruning
+# never races a build for the branch.
+concurrency:
+  group: firmware-${{ github.event_name == 'workflow_dispatch' && 'manual-' || '' }}${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     name: Unit tests (host)
+    # A same-repo PR's head commit already gets a push run, whose checks the PR
+    # shows too, so only PRs from forks need a run of their own. "build"
+    # repeats this condition.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: "3.15"
+
       - name: Install PlatformIO
         run: pip install --upgrade platformio
+
       - name: Run host-side unit tests
         run: pio test -e native
 
   build:
     name: Build firmware (${{ matrix.env }})
     needs: test
+    # Same condition as "test".
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -32,17 +49,20 @@ jobs:
     outputs:
       version: ${{ steps.ver.outputs.version }}
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: "3.15"
+
       - name: Cache PlatformIO
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ~/.platformio
             ~/.cache/pip
           key: pio-${{ runner.os }}-${{ matrix.env }}-${{ hashFiles('platformio.ini') }}
+
       - name: Install PlatformIO
         run: pip install --upgrade platformio
 
@@ -66,10 +86,21 @@ jobs:
       # The asset name embeds the board (must match cfg::kFirmwareAsset) so a
       # device only ever fetches the image built for it; version.txt is board-
       # independent (it's just the commit SHA both boards were built from).
+      # firmware-<board>.bin is the app-only image OTA flashes; firmware-
+      # <board>-full.bin is flashable at 0x0 for a first USB install. On
+      # ESP8266 the app image already is that (the bootloader is embedded),
+      # so it's published under both names; ESP32 envs build a merged image
+      # (scripts/merge_full_image.py).
       - name: Stage release assets
         run: |
           mkdir -p dist
-          cp .pio/build/${{ matrix.env }}/firmware.bin dist/firmware-${{ matrix.env }}.bin
+          build=.pio/build/${{ matrix.env }}
+          cp $build/firmware.bin dist/firmware-${{ matrix.env }}.bin
+          if [ -f $build/firmware-full.bin ]; then
+            cp $build/firmware-full.bin dist/firmware-${{ matrix.env }}-full.bin
+          else
+            cp $build/firmware.bin dist/firmware-${{ matrix.env }}-full.bin
+          fi
           echo -n "${{ steps.ver.outputs.version }}" > dist/version.txt
 
       - name: Upload build artifact
@@ -80,7 +111,7 @@ jobs:
 
   publish:
     name: Publish rolling release (OTA channel)
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && github.ref_type == 'branch'
     needs: build
     runs-on: ubuntu-latest
     permissions:
@@ -88,7 +119,8 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
+
       - name: Download builds
         uses: actions/download-artifact@v8
         with:
@@ -96,9 +128,8 @@ jobs:
           path: dist
           merge-multiple: true
 
-      # Each branch gets its own rolling "<branch>-latest" tag/release that CI
-      # overwrites on every push, with one binary per board attached. Devices
-      # poll a fixed channel URL for their own board's asset, e.g.
+      # Devices poll a fixed per-branch channel URL for their own board's
+      # asset, e.g.
       #   .../releases/download/master-latest/firmware-d1_mini.bin
       # so OTA always serves the newest build for the branch they track —
       # production devices follow "master-latest", test devices can be pointed
@@ -142,6 +173,8 @@ jobs:
         run: |
           stamp="$(TZ=UTC git show -s --format=%cd --date=format-local:%Y%m%d-%H%M%S "$GITHUB_SHA")"
           tag="${GITHUB_REF_NAME//\//-}-$stamp-${{ needs.build.outputs.version }}"
+          # A re-run for the same commit replaces its own archive.
+          gh release delete "$tag" --yes --cleanup-tag --repo "$GITHUB_REPOSITORY" || true
           gh release create "$tag" dist/*.bin dist/version.txt \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \

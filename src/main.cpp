@@ -350,7 +350,6 @@ void loop() {
   if (now - last_telemetry >= cfg::kTelemetryInterval) {
     last_telemetry = now;
     mqtt.publishWifi(WiFi.RSSI());
-    mqtt.publishUptime(now / 1000);
   }
 
   if (want_calibration_reset) {
