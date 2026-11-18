@@ -1,0 +1,27 @@
+name: Set up PlatformIO
+description: >-
+  Python, PlatformIO (pinned in requirements.txt) and the PlatformIO package
+  cache for one environment. Run after actions/checkout.
+
+inputs:
+  env:
+    description: PlatformIO environment the package cache is for.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v7
+      with:
+        python-version: "3.15"
+        cache: pip
+        cache-dependency-path: requirements.txt
+
+    - uses: actions/cache@v6
+      with:
+        path: ~/.platformio
+        key: pio-${{ runner.os }}-${{ inputs.env }}-${{ hashFiles('platformio.ini', 'requirements.txt') }}
+
+    - name: Install PlatformIO
+      shell: bash
+      run: pip install -r requirements.txt

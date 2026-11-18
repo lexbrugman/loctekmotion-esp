@@ -9,45 +9,51 @@
 
 namespace {
 
-// Fixed timing for every test, independent of cfg:: so the numbers stay easy
+// Fixed settings for every test, independent of cfg:: so the numbers stay easy
 // to reason about and don't drift if the production constants change.
-constexpr DeskMotionPlanner::Timing kTiming{
-    /*wake_settle=*/200,
-    /*command_interval=*/100,
-    /*move_timeout=*/1000,
-    /*height_stale_timeout=*/300,
-    /*target_timeout=*/500,
-    /*wake_retry_interval=*/150,
-    /*target_deadband=*/0.5f,
-    /*coarse_target_deadband=*/1.0f,
-    /*seek_settle_delay=*/200,
-    /*stable_duration=*/0,  // 0 = stable on the first tick with a height
-    /*correction_tap_max=*/300,
-    /*terminal_speed_drive_min=*/2000,
-    /*fine_height_limit=*/100.0f,
-    /*speed_window=*/600,
-    /*speed_min_span=*/250,
-    /*speed_max_age=*/400,
-};
+constexpr DeskMotionPlanner::Settings kSettings = [] {
+  DeskMotionPlanner::Settings s;
+  s.wake_settle = 200;
+  s.command_interval = 100;
+  s.move_timeout = 1000;
+  s.height_stale_timeout = 300;
+  s.first_report_timeout = 600;
+  s.motion_window = 300;
+  s.target_timeout = 500;
+  s.wake_retry_interval = 150;
+  s.target_deadband = 0.5f;
+  s.coarse_target_deadband = 1.0f;
+  s.seek_settle_delay = 200;
+  s.stable_duration = 0;  // 0 = stable on the first tick with a height
+  s.correction_tap_max = 300;
+  s.terminal_speed_drive_min = 2000;
+  s.fine_height_limit = 100.0f;
+  s.speed_window = 600;
+  s.speed_min_span = 250;
+  s.speed_max_age = 400;
+  return s;
+}();
 
 // Friendly model numbers: fallback coast = 4²/(2·2) = 4.0 cm; a measured
 // 3 cm/s gives 9/(2·2) = 2.25 cm; a 1 cm error taps for √(1/25)s = 200 ms.
 // Learning rates default to 0 so tests are deterministic unless a test
 // switches a specific rate on.
-constexpr MotionModel::Tunables kTunables{
-    /*seed_terminal_speed=*/4.0f,
-    /*seed_decel=*/2.0f,
-    /*seed_tap_gain=*/25.0f,
-    /*speed_learning_rate=*/0.0f,
-    /*decel_learning_rate=*/0.0f,
-    /*tap_learning_rate=*/0.0f,
-    /*min_terminal_speed=*/0.5f,
-    /*max_terminal_speed=*/10.0f,
-    /*min_decel=*/0.2f,
-    /*max_decel=*/20.0f,
-    /*min_tap_gain=*/5.0f,
-    /*max_tap_gain=*/100.0f,
-};
+constexpr MotionModel::Tunables kTunables = [] {
+  MotionModel::Tunables s;
+  s.seed_terminal_speed = 4.0f;
+  s.seed_decel = 2.0f;
+  s.seed_tap_gain = 25.0f;
+  s.speed_learning_rate = 0.0f;
+  s.decel_learning_rate = 0.0f;
+  s.tap_learning_rate = 0.0f;
+  s.min_terminal_speed = 0.5f;
+  s.max_terminal_speed = 10.0f;
+  s.min_decel = 0.2f;
+  s.max_decel = 20.0f;
+  s.min_tap_gain = 5.0f;
+  s.max_tap_gain = 100.0f;
+  return s;
+}();
 
 constexpr MotionModel::Tunables withRates(MotionModel::Tunables t, float speed_rate,
                                           float decel_rate, float tap_rate) {
@@ -57,27 +63,27 @@ constexpr MotionModel::Tunables withRates(MotionModel::Tunables t, float speed_r
   return t;
 }
 
-// Seek tests drive for longer than kTiming's 1 s safety timeout allows.
-constexpr DeskMotionPlanner::Timing withSeekTimeout(DeskMotionPlanner::Timing t) {
+// Seek tests drive for longer than kSettings's 1 s safety timeout allows.
+constexpr DeskMotionPlanner::Settings withSeekTimeout(DeskMotionPlanner::Settings t) {
   t.move_timeout = 20000;
   return t;
 }
-constexpr DeskMotionPlanner::Timing kSeekTiming = withSeekTimeout(kTiming);
+constexpr DeskMotionPlanner::Settings kSeekSettings = withSeekTimeout(kSettings);
 
-// kSeekTiming variant: non-zero stable_duration to test stability detection.
-constexpr DeskMotionPlanner::Timing withStabilityDetection(DeskMotionPlanner::Timing t) {
+// kSeekSettings variant: non-zero stable_duration to test stability detection.
+constexpr DeskMotionPlanner::Settings withStabilityDetection(DeskMotionPlanner::Settings t) {
   t.seek_settle_delay = 600;  // generous timeout; stability should fire first
   t.stable_duration = 100;
   return t;
 }
-constexpr DeskMotionPlanner::Timing kStabilityTiming =
-    withStabilityDetection(kSeekTiming);
+constexpr DeskMotionPlanner::Settings kStabilitySettings =
+    withStabilityDetection(kSeekSettings);
 
 constexpr float kMin = 60.0f;
 constexpr float kMax = 120.0f;
 
 // "Fresh" height age for tests that aren't exercising staleness — well under
-// kTiming.height_stale_timeout.
+// kSettings.height_stale_timeout.
 constexpr uint32_t kFresh = 0;
 
 // Records every frame the planner asks to send, identified by its data
@@ -100,13 +106,22 @@ size_t countFrames(const Recorder& r, const desk_cmd::Frame& expected) {
   return n;
 }
 
+// Start a drive with a long way to go, so tests of the drive itself (cadence,
+// limits, safety nets) don't run into the seek's own stop decision.
+void driveUp(DeskMotionPlanner& p, uint32_t now) {
+  p.moveToHeight(/*target_cm=*/110.0f, now, /*has_height=*/true, /*height=*/80.0f);
+}
+void driveDown(DeskMotionPlanner& p, uint32_t now) {
+  p.moveToHeight(/*target_cm=*/65.0f, now, /*has_height=*/true, /*height=*/95.0f);
+}
+
 }  // namespace
 
-void test_continuous_move_wakes_then_drives_at_cadence() {
+void test_drive_wakes_then_sends_frames_at_cadence() {
   Recorder rec;
-  DeskMotionPlanner p(kMin, kMax, kTiming, kTunables, std::ref(rec));
+  DeskMotionPlanner p(kMin, kMax, kSettings, kTunables, std::ref(rec));
 
-  p.moveUp(1000);
+  driveUp(p, 1000);
   TEST_ASSERT_EQUAL(1, rec.sent.size());
   TEST_ASSERT_TRUE(sentFrame(rec, 0, desk_cmd::Wake));
   TEST_ASSERT_TRUE(p.moving());
@@ -126,11 +141,11 @@ void test_continuous_move_wakes_then_drives_at_cadence() {
   TEST_ASSERT_TRUE(sentFrame(rec, 2, desk_cmd::Up));
 }
 
-void test_stop_halts_continuous_movement() {
+void test_stop_halts_a_drive() {
   Recorder rec;
-  DeskMotionPlanner p(kMin, kMax, kTiming, kTunables, std::ref(rec));
+  DeskMotionPlanner p(kMin, kMax, kSettings, kTunables, std::ref(rec));
 
-  p.moveDown(1000);
+  driveDown(p, 1000);
   p.tick(1200, false, 0.0f, kFresh);
   TEST_ASSERT_TRUE(p.moving());
 
@@ -142,55 +157,59 @@ void test_stop_halts_continuous_movement() {
   TEST_ASSERT_EQUAL(before, rec.sent.size());  // no further frames once stopped
 }
 
-void test_continuous_movement_stops_at_travel_limits() {
+void test_drive_stops_at_travel_limits() {
+  // A reading at/beyond a travel limit aborts the move outright (no settling,
+  // no correction taps) rather than being treated as a seek arrival.
   Recorder up_rec;
-  DeskMotionPlanner up(kMin, kMax, kTiming, kTunables, std::ref(up_rec));
-  up.moveUp(1000);
-  up.tick(1200, /*has_height=*/true, kMax, kFresh);  // already at the top of travel
+  DeskMotionPlanner up(kMin, kMax, kSettings, kTunables, std::ref(up_rec));
+  driveUp(up, 1000);
+  up.tick(1200, /*has_height=*/true, kMax, kFresh);  // at the top of travel
   TEST_ASSERT_FALSE(up.moving());
+  TEST_ASSERT_FALSE(up.seeking());
 
   Recorder down_rec;
-  DeskMotionPlanner down(kMin, kMax, kTiming, kTunables, std::ref(down_rec));
-  down.moveDown(1000);
-  down.tick(1200, /*has_height=*/true, kMin, kFresh);  // already at the bottom
+  DeskMotionPlanner down(kMin, kMax, kSettings, kTunables, std::ref(down_rec));
+  driveDown(down, 1000);
+  down.tick(1200, /*has_height=*/true, kMin, kFresh);  // at the bottom
   TEST_ASSERT_FALSE(down.moving());
+  TEST_ASSERT_FALSE(down.seeking());
 }
 
 void test_runaway_movement_stops_after_travel_timeout() {
   Recorder rec;
-  DeskMotionPlanner p(kMin, kMax, kTiming, kTunables, std::ref(rec));
+  DeskMotionPlanner p(kMin, kMax, kSettings, kTunables, std::ref(rec));
 
-  p.moveUp(1000);
-  p.tick(1000 + kTiming.move_timeout + 1, /*has_height=*/false, 0.0f, kFresh);
+  driveUp(p, 1000);
+  p.tick(1000 + kSettings.move_timeout + 1, /*has_height=*/false, 0.0f, kFresh);
   TEST_ASSERT_FALSE(p.moving());  // the safety net cut the move short
 }
 
-void test_continuous_movement_survives_a_stale_report_at_wakeup() {
+void test_drive_survives_a_stale_report_at_wakeup() {
   Recorder rec;
-  DeskMotionPlanner p(kMin, kMax, kTiming, kTunables, std::ref(rec));
+  DeskMotionPlanner p(kMin, kMax, kSettings, kTunables, std::ref(rec));
 
   // The display was asleep when the move was requested: the only height
   // report on record is long since stale (older than height_stale_timeout),
   // simply because nothing has streamed since. That must not be mistaken for
   // a mid-move stall — the desk needs a moment to wake and resume streaming.
-  p.moveUp(1000);
+  driveUp(p, 1000);
   p.tick(1200, /*has_height=*/true, /*height=*/80.0f,
-         /*height_age=*/kTiming.height_stale_timeout + 50);
+         /*height_age=*/kSettings.height_stale_timeout + 50);
   TEST_ASSERT_TRUE(p.moving());
   TEST_ASSERT_EQUAL(2, rec.sent.size());  // wake, then the first Up frame
   TEST_ASSERT_TRUE(sentFrame(rec, 1, desk_cmd::Up));
 
   // Once a fresh report confirms the stream is live, staleness is tracked
-  // exactly as before — see test_continuous_movement_aborts_when_height_...
+  // exactly as before — see test_drive_aborts_when_height_reports_go_stale.
   p.tick(1300, /*has_height=*/true, /*height=*/80.5f, /*height_age=*/0);
   TEST_ASSERT_TRUE(p.moving());
 }
 
-void test_continuous_movement_aborts_when_height_reports_go_stale() {
+void test_drive_aborts_when_height_reports_go_stale() {
   Recorder rec;
-  DeskMotionPlanner p(kMin, kMax, kTiming, kTunables, std::ref(rec));
+  DeskMotionPlanner p(kMin, kMax, kSettings, kTunables, std::ref(rec));
 
-  p.moveUp(1000);
+  driveUp(p, 1000);
   p.tick(1200, /*has_height=*/true, /*height=*/80.0f, /*height_age=*/0);
   TEST_ASSERT_TRUE(p.moving());  // under way, reports still fresh
 
@@ -198,13 +217,47 @@ void test_continuous_movement_aborts_when_height_reports_go_stale() {
   // limit checks would go blind on a frozen value, so the planner should bail
   // out via the staleness net long before move_timeout (1000 ms) elapses.
   p.tick(1300, /*has_height=*/true, /*height=*/80.0f,
-         /*height_age=*/kTiming.height_stale_timeout + 50);
+         /*height_age=*/kSettings.height_stale_timeout + 50);
   TEST_ASSERT_FALSE(p.moving());
+}
+
+void test_drive_aborts_when_no_fresh_report_ever_arrives() {
+  Recorder rec;
+  DeskMotionPlanner p(kMin, kMax, kSettings, kTunables, std::ref(rec));
+
+  // The only report on record is stale and nothing new ever streams (dead RX
+  // line, or a locked desk showing "LOC"): the staleness check never arms,
+  // so the first-report deadline has to end the drive — long before
+  // move_timeout (1000 ms).
+  const uint32_t stale = kSettings.height_stale_timeout + 50;
+  driveUp(p, 1000);
+  p.tick(1000 + kSettings.first_report_timeout, /*has_height=*/true, 80.0f, stale);
+  TEST_ASSERT_TRUE(p.moving());  // still within the deadline
+
+  p.tick(1000 + kSettings.first_report_timeout + 1, /*has_height=*/true, 80.0f, stale);
+  TEST_ASSERT_FALSE(p.moving());
+  TEST_ASSERT_FALSE(p.seeking());  // the whole seek is abandoned, not settled
+
+  DeskMotionPlanner::SeekReport report;
+  TEST_ASSERT_FALSE(p.takeSeekReport(report));  // an abort, so no report
+}
+
+void test_first_fresh_report_lifts_the_first_report_deadline() {
+  Recorder rec;
+  DeskMotionPlanner p(kMin, kMax, kSeekSettings, kTunables, std::ref(rec));
+
+  driveUp(p, 1000);
+  p.tick(1300, /*has_height=*/true, 80.0f, /*height_age=*/0);  // stream is live
+
+  // Fresh reports keep arriving past the deadline: the drive carries on.
+  p.tick(1000 + kSeekSettings.first_report_timeout + 100, /*has_height=*/true, 80.5f,
+         /*height_age=*/0);
+  TEST_ASSERT_TRUE(p.moving());
 }
 
 void test_move_to_height_seeks_toward_target_and_stops_on_arrival() {
   Recorder rec;
-  DeskMotionPlanner p(kMin, kMax, kTiming, kTunables, std::ref(rec));
+  DeskMotionPlanner p(kMin, kMax, kSettings, kTunables, std::ref(rec));
 
   p.moveToHeight(/*target_cm=*/99.0f, /*now=*/1000, /*has_height=*/true,
                  /*height=*/80.0f);
@@ -219,7 +272,7 @@ void test_pursuing_target_covers_the_deferred_phase() {
   // height slider holds its setpoint immediately — including the deferred wake
   // window that precedes the live seek, which seeking() alone does not cover.
   Recorder rec;
-  DeskMotionPlanner p(kMin, kMax, kTiming, kTunables, std::ref(rec));
+  DeskMotionPlanner p(kMin, kMax, kSettings, kTunables, std::ref(rec));
 
   TEST_ASSERT_FALSE(p.pursuingTarget());  // idle
 
@@ -234,7 +287,7 @@ void test_pursuing_target_covers_the_deferred_phase() {
 
 void test_pursuing_target_clears_on_stop() {
   Recorder rec;
-  DeskMotionPlanner p(kMin, kMax, kTiming, kTunables, std::ref(rec));
+  DeskMotionPlanner p(kMin, kMax, kSettings, kTunables, std::ref(rec));
 
   p.moveToHeight(99.0f, 1000, /*has_height=*/true, /*height=*/80.0f);
   TEST_ASSERT_TRUE(p.pursuingTarget());
@@ -242,18 +295,34 @@ void test_pursuing_target_clears_on_stop() {
   TEST_ASSERT_FALSE(p.pursuingTarget());  // an interrupting command releases the hold
 }
 
+void test_target_reports_the_clamped_target() {
+  Recorder rec;
+  DeskMotionPlanner p(kMin, kMax, kSettings, kTunables, std::ref(rec));
+  p.moveToHeight(kMax + 50.0f, 1000, /*has_height=*/true, 80.0f);
+  TEST_ASSERT_TRUE(p.pursuingTarget());
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, kMax, p.target());
+
+  // Also while still waiting for a first height report.
+  Recorder rec2;
+  DeskMotionPlanner q(kMin, kMax, kSettings, kTunables, std::ref(rec2));
+  q.moveToHeight(kMin - 10.0f, 1000, /*has_height=*/false, 0.0f);
+  TEST_ASSERT_TRUE(q.pursuingTarget());
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, kMin, q.target());
+}
+
 void test_move_to_height_within_deadband_does_not_move() {
   Recorder rec;
-  DeskMotionPlanner p(kMin, kMax, kTiming, kTunables, std::ref(rec));
+  DeskMotionPlanner p(kMin, kMax, kSettings, kTunables, std::ref(rec));
 
   p.moveToHeight(99.0f, 1000, /*has_height=*/true, /*height=*/98.8f);  // within 0.5 cm
   TEST_ASSERT_FALSE(p.moving());
+  TEST_ASSERT_FALSE(p.pursuingTarget());  // so the slider echoes the live height
   TEST_ASSERT_TRUE(rec.sent.empty());  // already there — nothing sent at all
 }
 
 void test_move_to_height_defers_until_a_height_is_known() {
   Recorder rec;
-  DeskMotionPlanner p(kMin, kMax, kTiming, kTunables, std::ref(rec));
+  DeskMotionPlanner p(kMin, kMax, kSettings, kTunables, std::ref(rec));
 
   p.moveToHeight(99.0f, 1000, /*has_height=*/false, 0.0f);
   TEST_ASSERT_FALSE(p.moving());                        // nothing to seek from yet
@@ -265,7 +334,7 @@ void test_move_to_height_defers_until_a_height_is_known() {
 
 void test_move_to_height_rewakes_periodically_while_awaiting_report() {
   Recorder rec;
-  DeskMotionPlanner p(kMin, kMax, kTiming, kTunables, std::ref(rec));
+  DeskMotionPlanner p(kMin, kMax, kSettings, kTunables, std::ref(rec));
 
   p.moveToHeight(99.0f, 1000, /*has_height=*/false, 0.0f);
   TEST_ASSERT_EQUAL(1, countFrames(rec, desk_cmd::Wake));  // initial wake
@@ -289,20 +358,20 @@ void test_move_to_height_rewakes_periodically_while_awaiting_report() {
 
 void test_move_to_height_gives_up_if_no_height_report_arrives() {
   Recorder rec;
-  DeskMotionPlanner p(kMin, kMax, kTiming, kTunables, std::ref(rec));
+  DeskMotionPlanner p(kMin, kMax, kSettings, kTunables, std::ref(rec));
 
   p.moveToHeight(99.0f, 1000, false, 0.0f);
-  p.tick(1000 + kTiming.target_timeout + 1, false, 0.0f, kFresh);
+  p.tick(1000 + kSettings.target_timeout + 1, false, 0.0f, kFresh);
   TEST_ASSERT_FALSE(p.moving());  // gave up waiting
 
   // A late height report doesn't resurrect the abandoned target.
-  p.tick(1000 + kTiming.target_timeout + 100, true, 80.0f, kFresh);
+  p.tick(1000 + kSettings.target_timeout + 100, true, 80.0f, kFresh);
   TEST_ASSERT_FALSE(p.moving());
 }
 
 void test_one_shot_command_wakes_then_sends_after_settle() {
   Recorder rec;
-  DeskMotionPlanner p(kMin, kMax, kTiming, kTunables, std::ref(rec));
+  DeskMotionPlanner p(kMin, kMax, kSettings, kTunables, std::ref(rec));
 
   p.issue(desk_cmd::Preset1, 1000);
   TEST_ASSERT_TRUE(sentFrame(rec, 0, desk_cmd::Wake));
@@ -317,9 +386,9 @@ void test_one_shot_command_wakes_then_sends_after_settle() {
 
 void test_one_shot_command_cancels_an_in_progress_move() {
   Recorder rec;
-  DeskMotionPlanner p(kMin, kMax, kTiming, kTunables, std::ref(rec));
+  DeskMotionPlanner p(kMin, kMax, kSettings, kTunables, std::ref(rec));
 
-  p.moveUp(1000);
+  driveUp(p, 1000);
   p.tick(1200, false, 0.0f, kFresh);
   TEST_ASSERT_TRUE(p.moving());
 
@@ -327,9 +396,237 @@ void test_one_shot_command_cancels_an_in_progress_move() {
   TEST_ASSERT_FALSE(p.moving());  // presets move the desk autonomously
 }
 
+void test_halt_cancels_the_desks_own_travel() {
+  Recorder rec;
+  DeskMotionPlanner p(kMin, kMax, kSettings, kTunables, std::ref(rec));
+
+  // A preset is under way: the desk moves on its own, the planner is idle.
+  p.issue(desk_cmd::Preset1, 1000);
+  p.tick(1200, true, 80.0f, kFresh);
+  p.tick(1300, true, 80.3f, kFresh);
+  TEST_ASSERT_FALSE(p.busy());
+
+  // stop() sends nothing; halt() wakes the desk...
+  const size_t before = rec.sent.size();
+  p.stop();
+  TEST_ASSERT_EQUAL(before, rec.sent.size());
+  p.halt(1400);
+  TEST_ASSERT_EQUAL(before + 1, rec.sent.size());
+  TEST_ASSERT_TRUE(sentFrame(rec, before, desk_cmd::Wake));
+  TEST_ASSERT_TRUE(p.busy());
+
+  // ...and sends the cancel key once the wake has settled, the desk still
+  // travelling.
+  p.tick(1500, true, 80.6f, kFresh);
+  TEST_ASSERT_EQUAL(before + 1, rec.sent.size());  // still settling
+  p.tick(1400 + kSettings.wake_settle, true, 80.9f, kFresh);
+  TEST_ASSERT_EQUAL(before + 2, rec.sent.size());
+  TEST_ASSERT_TRUE(sentFrame(rec, before + 1, desk_cmd::Cancel));
+  TEST_ASSERT_FALSE(p.busy());
+}
+
+void test_halt_skips_the_cancel_if_travel_ended_while_settling() {
+  // The desk stops by itself during the wake settle: by then the cancel key
+  // would start a preset move, so it must not go out.
+  Recorder rec;
+  DeskMotionPlanner p(kMin, kMax, kSettings, kTunables, std::ref(rec));
+  p.tick(1000, true, 80.0f, kFresh);
+  p.tick(1300, true, 80.3f, kFresh);  // last movement
+
+  p.halt(1450);  // still within motion_window: wake, cancel pending
+  TEST_ASSERT_EQUAL(1, rec.sent.size());
+  p.tick(1450 + kSettings.wake_settle, true, 80.3f, kFresh);  // no change since 1300
+  TEST_ASSERT_EQUAL(1, rec.sent.size());
+  TEST_ASSERT_EQUAL(0, countFrames(rec, desk_cmd::Cancel));
+}
+
+void test_a_new_command_drops_a_pending_cancel() {
+  Recorder rec;
+  DeskMotionPlanner p(kMin, kMax, kSettings, kTunables, std::ref(rec));
+  p.tick(1000, true, 80.0f, kFresh);
+  p.tick(1100, true, 80.3f, kFresh);
+  p.halt(1150);
+
+  // A preset pressed during the settle replaces the cancel (it cancels the
+  // travel itself)...
+  p.issue(desk_cmd::Preset2, 1200);
+  p.tick(1150 + kSettings.wake_settle, true, 80.6f, kFresh);
+  TEST_ASSERT_EQUAL(0, countFrames(rec, desk_cmd::Cancel));
+
+  // ...and a plain stop() drops it too.
+  Recorder rec2;
+  DeskMotionPlanner q(kMin, kMax, kSettings, kTunables, std::ref(rec2));
+  q.tick(1000, true, 80.0f, kFresh);
+  q.tick(1100, true, 80.3f, kFresh);
+  q.halt(1150);
+  q.stop();
+  q.tick(1150 + kSettings.wake_settle, true, 80.6f, kFresh);
+  TEST_ASSERT_EQUAL(0, countFrames(rec2, desk_cmd::Cancel));
+}
+
+void test_a_second_stop_during_the_same_travel_sends_no_second_cancel() {
+  // STOP pressed twice: the first cancel stops the travel, and the desk is
+  // still decelerating when the second STOP arrives. A second cancel would
+  // reach an idle box and start a move to that preset.
+  Recorder rec;
+  DeskMotionPlanner p(kMin, kMax, kSettings, kTunables, std::ref(rec));
+  p.tick(1000, true, 80.0f, kFresh);
+  p.tick(1100, true, 80.3f, kFresh);  // travel under way
+  p.halt(1150);
+  p.tick(1150 + kSettings.wake_settle, true, 80.5f, kFresh);  // cancel goes out
+  TEST_ASSERT_EQUAL(1, countFrames(rec, desk_cmd::Cancel));
+
+  p.tick(1400, true, 80.6f, kFresh);  // coming to rest
+  const size_t before = rec.sent.size();
+  p.halt(1450);
+  TEST_ASSERT_EQUAL(before, rec.sent.size());  // not even a wake
+  p.tick(1450 + kSettings.wake_settle, true, 80.7f, kFresh);
+  TEST_ASSERT_EQUAL(1, countFrames(rec, desk_cmd::Cancel));
+}
+
+void test_a_new_travel_can_be_cancelled_again() {
+  Recorder rec;
+  DeskMotionPlanner p(kMin, kMax, kSettings, kTunables, std::ref(rec));
+  p.tick(1000, true, 80.0f, kFresh);
+  p.tick(1100, true, 80.3f, kFresh);
+  p.halt(1150);
+  p.tick(1150 + kSettings.wake_settle, true, 80.5f, kFresh);
+  TEST_ASSERT_EQUAL(1, countFrames(rec, desk_cmd::Cancel));
+
+  // The desk comes to rest, then a new travel starts (a handset preset).
+  const uint32_t again = 1350 + kSettings.motion_window + 1000;
+  p.tick(again, true, 82.0f, kFresh);
+  p.tick(again + 100, true, 82.3f, kFresh);
+  p.halt(again + 150);
+  p.tick(again + 150 + kSettings.wake_settle, true, 82.6f, kFresh);
+  TEST_ASSERT_EQUAL(2, countFrames(rec, desk_cmd::Cancel));
+}
+
+void test_stop_after_a_preset_cancelled_the_travel_sends_no_cancel() {
+  // A preset pressed from HA during travel cancels it too (that's how the
+  // box behaves); a STOP right after must not add a key of its own.
+  Recorder rec;
+  DeskMotionPlanner p(kMin, kMax, kSettings, kTunables, std::ref(rec));
+  p.tick(1000, true, 80.0f, kFresh);
+  p.tick(1100, true, 80.3f, kFresh);  // travel under way
+  p.issue(desk_cmd::Preset2, 1150);
+  p.tick(1150 + kSettings.wake_settle, true, 80.5f, kFresh);  // preset key out
+  TEST_ASSERT_EQUAL(1, countFrames(rec, desk_cmd::Preset2));
+
+  p.halt(1400);
+  p.tick(1400 + kSettings.wake_settle, true, 80.7f, kFresh);
+  TEST_ASSERT_EQUAL(0, countFrames(rec, desk_cmd::Cancel));
+}
+
+void test_a_slider_command_replaces_a_queued_preset() {
+  // Preset pressed, then a slider move before the preset has gone out; with
+  // no height known yet the slider move waits — the preset must not fire.
+  Recorder rec;
+  DeskMotionPlanner p(kMin, kMax, kSettings, kTunables, std::ref(rec));
+  p.issue(desk_cmd::Preset2, 1000);
+  p.moveToHeight(90.0f, 1050, /*has_height=*/false, 0.0f);
+  p.tick(1000 + kSettings.wake_settle, /*has_height=*/false, 0.0f, kFresh);
+  TEST_ASSERT_EQUAL(0, countFrames(rec, desk_cmd::Preset2));
+  TEST_ASSERT_TRUE(p.pursuingTarget());
+}
+
+void test_halt_leaves_an_idle_desk_alone() {
+  // On an idle desk the cancel key would start a preset move, so it must not
+  // be sent: neither long after the last movement...
+  Recorder rec;
+  DeskMotionPlanner p(kMin, kMax, kSettings, kTunables, std::ref(rec));
+  p.tick(1000, true, 80.0f, kFresh);
+  p.tick(1100, true, 80.3f, kFresh);
+  p.halt(1100 + kSettings.motion_window + 1);
+  TEST_ASSERT_EQUAL(0, rec.sent.size());
+
+  // ...nor right after the first report after boot, which isn't movement.
+  Recorder boot_rec;
+  DeskMotionPlanner boot(kMin, kMax, kSettings, kTunables, std::ref(boot_rec));
+  boot.tick(1000, true, 80.0f, kFresh);
+  boot.halt(1010);
+  TEST_ASSERT_EQUAL(0, boot_rec.sent.size());
+}
+
+void test_halt_of_our_own_drive_only_stops_sending() {
+  // The desk moves because we drive it: stopping our frames halts it, and a
+  // cancel key would start a preset move as it coasts.
+  Recorder rec;
+  DeskMotionPlanner p(kMin, kMax, kSettings, kTunables, std::ref(rec));
+  driveUp(p, 1000);
+  p.tick(1200, true, 80.0f, kFresh);
+  p.tick(1300, true, 80.3f, kFresh);
+
+  const size_t before = rec.sent.size();
+  p.halt(1350);
+  TEST_ASSERT_FALSE(p.moving());
+  TEST_ASSERT_FALSE(p.busy());
+  TEST_ASSERT_EQUAL(before, rec.sent.size());
+  p.tick(1450, true, 80.5f, kFresh);  // coasting: still nothing sent
+  TEST_ASSERT_EQUAL(before, rec.sent.size());
+}
+
+void test_a_held_command_replaces_a_seek() {
+  // Child lock pressed mid-seek: the hold takes over, the seek is gone (it
+  // no longer counts as pursuing a target) and no drive frames go out.
+  Recorder rec;
+  DeskMotionPlanner p(kMin, kMax, kSeekSettings, kTunables, std::ref(rec));
+  driveUp(p, 1000);
+  p.tick(1200, true, 80.0f, kFresh);
+  TEST_ASSERT_TRUE(p.pursuingTarget());
+
+  p.holdCommand(desk_cmd::ChildLock, 1300, /*duration=*/500);
+  TEST_ASSERT_FALSE(p.pursuingTarget());
+  TEST_ASSERT_FALSE(p.moving());
+  const size_t ups = countFrames(rec, desk_cmd::Up);
+  p.tick(1500, true, 80.0f, kFresh);
+  p.tick(1600, true, 80.0f, kFresh);
+  TEST_ASSERT_EQUAL(ups, countFrames(rec, desk_cmd::Up));
+  TEST_ASSERT_TRUE(countFrames(rec, desk_cmd::ChildLock) > 0);
+}
+
+void test_a_held_command_replaces_a_seek_awaiting_its_height() {
+  // A seek still waiting for a first height report must not start once the
+  // report arrives if a held command has replaced it in the meantime.
+  Recorder rec;
+  DeskMotionPlanner p(kMin, kMax, kSettings, kTunables, std::ref(rec));
+  p.moveToHeight(90.0f, 1000, /*has_height=*/false, 0.0f);
+  p.holdCommand(desk_cmd::ChildLock, 1100, /*duration=*/500);
+  TEST_ASSERT_FALSE(p.pursuingTarget());
+
+  p.tick(1300, /*has_height=*/true, 80.0f, kFresh);
+  TEST_ASSERT_FALSE(p.seeking());
+  TEST_ASSERT_EQUAL(0, countFrames(rec, desk_cmd::Up));
+}
+
+void test_busy_covers_every_kind_of_pending_work() {
+  Recorder rec;
+  DeskMotionPlanner p(kMin, kMax, kSettings, kTunables, std::ref(rec));
+  TEST_ASSERT_FALSE(p.busy());
+
+  p.issue(desk_cmd::Preset1, 1000);  // one-shot awaiting its wake settle
+  TEST_ASSERT_TRUE(p.busy());
+  p.tick(1200, false, 0.0f, kFresh);  // fired
+  TEST_ASSERT_FALSE(p.busy());
+
+  p.moveToHeight(90.0f, 2000, /*has_height=*/false, 0.0f);  // deferred seek
+  TEST_ASSERT_TRUE(p.busy());
+  p.stop();
+  TEST_ASSERT_FALSE(p.busy());
+
+  driveUp(p, 3000);  // active seek
+  TEST_ASSERT_TRUE(p.busy());
+  p.stop();
+
+  p.holdCommand(desk_cmd::ChildLock, 4000, /*duration=*/500);  // held command
+  TEST_ASSERT_TRUE(p.busy());
+  p.tick(4500, false, 0.0f, kFresh);  // hold elapsed
+  TEST_ASSERT_FALSE(p.busy());
+}
+
 void test_stop_cancels_a_pending_one_shot() {
   Recorder rec;
-  DeskMotionPlanner p(kMin, kMax, kTiming, kTunables, std::ref(rec));
+  DeskMotionPlanner p(kMin, kMax, kSettings, kTunables, std::ref(rec));
 
   p.issue(desk_cmd::Preset1, 1000);
   p.stop();  // STOP arrives within the wake-settle window
@@ -340,7 +637,7 @@ void test_stop_cancels_a_pending_one_shot() {
 
 void test_held_command_repeats_at_cadence_then_stops() {
   Recorder rec;
-  DeskMotionPlanner p(kMin, kMax, kTiming, kTunables, std::ref(rec));
+  DeskMotionPlanner p(kMin, kMax, kSettings, kTunables, std::ref(rec));
 
   // Mirrors holding a handset button: wake, settle, then resend the frame at
   // the movement cadence for the requested duration before releasing.
@@ -372,7 +669,7 @@ void test_held_command_repeats_at_cadence_then_stops() {
 
 void test_seek_stops_early_by_fallback_coast_without_speed_estimate() {
   Recorder rec;
-  DeskMotionPlanner p(kMin, kMax, kSeekTiming, kTunables, std::ref(rec));
+  DeskMotionPlanner p(kMin, kMax, kSeekSettings, kTunables, std::ref(rec));
 
   p.moveToHeight(99.0f, 1000, true, 90.0f);
 
@@ -392,7 +689,7 @@ void test_seek_stops_early_by_fallback_coast_without_speed_estimate() {
 
 void test_seek_uses_measured_speed_to_shrink_the_coast_prediction() {
   Recorder rec;
-  DeskMotionPlanner p(kMin, kMax, kSeekTiming, kTunables, std::ref(rec));
+  DeskMotionPlanner p(kMin, kMax, kSeekSettings, kTunables, std::ref(rec));
 
   // Heights rise 0.3 cm per 100 ms tick = a measured 3 cm/s, predicting a
   // 2.25 cm coast — tighter than the 4 cm terminal-speed fallback.
@@ -415,7 +712,7 @@ void test_seek_uses_measured_speed_to_shrink_the_coast_prediction() {
 
 void test_seek_sizes_correction_taps_quadratically() {
   Recorder rec;
-  DeskMotionPlanner p(kMin, kMax, kSeekTiming, kTunables, std::ref(rec));
+  DeskMotionPlanner p(kMin, kMax, kSeekSettings, kTunables, std::ref(rec));
 
   p.moveToHeight(99.0f, 1000, true, 90.0f);
   p.tick(1300, true, 95.1f, kFresh);  // fallback stop (95.1 + 4 >= 99)
@@ -438,7 +735,7 @@ void test_seek_sizes_correction_taps_quadratically() {
 
 void test_seek_learns_decel_from_the_observed_coast() {
   Recorder rec;
-  DeskMotionPlanner p(kMin, kMax, kSeekTiming,
+  DeskMotionPlanner p(kMin, kMax, kSeekSettings,
                       withRates(kTunables, 0.0f, /*decel_rate=*/1.0f, 0.0f),
                       std::ref(rec));
 
@@ -465,7 +762,7 @@ void test_seek_learns_decel_from_the_observed_coast() {
 
 void test_seek_learns_terminal_speed_after_a_long_drive() {
   Recorder rec;
-  DeskMotionPlanner p(kMin, kMax, kSeekTiming,
+  DeskMotionPlanner p(kMin, kMax, kSeekSettings,
                       withRates(kTunables, /*speed_rate=*/1.0f, 0.0f, 0.0f),
                       std::ref(rec));
 
@@ -490,7 +787,7 @@ void test_seek_learns_terminal_speed_after_a_long_drive() {
 
 void test_seek_learning_is_gated_above_the_fine_resolution_limit() {
   Recorder rec;
-  DeskMotionPlanner p(kMin, kMax, kSeekTiming,
+  DeskMotionPlanner p(kMin, kMax, kSeekSettings,
                       withRates(kTunables, 1.0f, 1.0f, 1.0f), std::ref(rec));
 
   // Everything above 100 cm reports whole centimetres only: the estimator
@@ -522,7 +819,7 @@ void test_seek_stop_decision_runs_between_command_frames() {
   // arrives, not be held until the next command-frame slot — that delay is a
   // late stop of up to a full command interval, i.e. a built-in overshoot.
   Recorder rec;
-  DeskMotionPlanner p(kMin, kMax, kSeekTiming, kTunables, std::ref(rec));
+  DeskMotionPlanner p(kMin, kMax, kSeekSettings, kTunables, std::ref(rec));
 
   p.moveToHeight(99.0f, 1000, true, 90.0f);
   p.tick(1200, true, 94.0f, kFresh);  // frame slot: 94 + 4 < 99 -> keep driving
@@ -538,7 +835,7 @@ void test_correction_tap_ends_at_its_computed_duration() {
   // next command-frame slot — otherwise actual tap durations quantize to the
   // frame cadence and the learned quadratic gain is fitted to noise.
   Recorder rec;
-  DeskMotionPlanner p(kMin, kMax, kSeekTiming, kTunables, std::ref(rec));
+  DeskMotionPlanner p(kMin, kMax, kSeekSettings, kTunables, std::ref(rec));
 
   p.moveToHeight(99.0f, 1000, true, 90.0f);
   p.tick(1300, true, 95.1f, kFresh);  // fallback stop (95.1 + 4 >= 99)
@@ -562,7 +859,7 @@ void test_seek_dead_reckons_between_height_reports() {
   // confirms it. Learning then measures the coast from the dead-reckoned
   // cut-off position, not the stale report.
   Recorder rec;
-  DeskMotionPlanner p(kMin, kMax, kSeekTiming,
+  DeskMotionPlanner p(kMin, kMax, kSeekSettings,
                       withRates(kTunables, 0.0f, /*decel_rate=*/1.0f, 0.0f),
                       std::ref(rec));
 
@@ -603,7 +900,7 @@ void test_coarse_zone_widens_the_deadband() {
   // 111 only past 110.5) and the planner would ping-pong between the two
   // readings. The coarse deadband (1.0 here) accepts the nearest reading.
   Recorder rec;
-  DeskMotionPlanner p(kMin, kMax, kSeekTiming, kTunables, std::ref(rec));
+  DeskMotionPlanner p(kMin, kMax, kSeekSettings, kTunables, std::ref(rec));
 
   // Already as close as a whole-cm reading can get: no movement at all.
   p.moveToHeight(110.9f, 1000, true, 110.0f);
@@ -624,7 +921,7 @@ void test_seek_waits_for_height_stability_before_sampling() {
   // Verifies that the settle phase waits until height stops changing for
   // stable_duration ms before firing, rather than sampling a mid-coast reading.
   Recorder rec;
-  DeskMotionPlanner p(kMin, kMax, kStabilityTiming, kTunables, std::ref(rec));
+  DeskMotionPlanner p(kMin, kMax, kStabilitySettings, kTunables, std::ref(rec));
 
   p.moveToHeight(99.0f, 1000, true, 80.0f);
   p.tick(1300, true, 95.1f, kFresh);  // fallback stop -> settling
@@ -643,7 +940,7 @@ void test_seek_waits_for_height_stability_before_sampling() {
 
 void test_completed_seek_yields_a_report_once() {
   Recorder rec;
-  DeskMotionPlanner p(kMin, kMax, kSeekTiming, kTunables, std::ref(rec));
+  DeskMotionPlanner p(kMin, kMax, kSeekSettings, kTunables, std::ref(rec));
 
   DeskMotionPlanner::SeekReport r{};
   TEST_ASSERT_FALSE(p.takeSeekReport(r));  // nothing completed yet
@@ -673,7 +970,7 @@ void test_completed_seek_yields_a_report_once() {
 
 void test_aborted_seek_yields_no_report() {
   Recorder rec;
-  DeskMotionPlanner p(kMin, kMax, kSeekTiming, kTunables, std::ref(rec));
+  DeskMotionPlanner p(kMin, kMax, kSeekSettings, kTunables, std::ref(rec));
 
   p.moveToHeight(99.0f, 1000, true, 90.0f);
   p.tick(1200, true, 91.0f, kFresh);  // driving
@@ -685,7 +982,7 @@ void test_aborted_seek_yields_no_report() {
 
 void test_set_learned_state_sanitizes_implausible_values() {
   Recorder rec;
-  DeskMotionPlanner p(kMin, kMax, kSeekTiming, kTunables, std::ref(rec));
+  DeskMotionPlanner p(kMin, kMax, kSeekSettings, kTunables, std::ref(rec));
 
   // A restore from a missing/corrupt flash file arrives as zeros.
   DeskMotionPlanner::LearnedState bad{};
@@ -712,21 +1009,36 @@ void test_set_learned_state_sanitizes_implausible_values() {
 
 int main(int, char**) {
   UNITY_BEGIN();
-  RUN_TEST(test_continuous_move_wakes_then_drives_at_cadence);
-  RUN_TEST(test_stop_halts_continuous_movement);
-  RUN_TEST(test_continuous_movement_stops_at_travel_limits);
+  RUN_TEST(test_drive_wakes_then_sends_frames_at_cadence);
+  RUN_TEST(test_stop_halts_a_drive);
+  RUN_TEST(test_drive_stops_at_travel_limits);
   RUN_TEST(test_runaway_movement_stops_after_travel_timeout);
-  RUN_TEST(test_continuous_movement_survives_a_stale_report_at_wakeup);
-  RUN_TEST(test_continuous_movement_aborts_when_height_reports_go_stale);
+  RUN_TEST(test_drive_survives_a_stale_report_at_wakeup);
+  RUN_TEST(test_drive_aborts_when_height_reports_go_stale);
+  RUN_TEST(test_drive_aborts_when_no_fresh_report_ever_arrives);
+  RUN_TEST(test_first_fresh_report_lifts_the_first_report_deadline);
   RUN_TEST(test_move_to_height_seeks_toward_target_and_stops_on_arrival);
   RUN_TEST(test_pursuing_target_covers_the_deferred_phase);
   RUN_TEST(test_pursuing_target_clears_on_stop);
+  RUN_TEST(test_target_reports_the_clamped_target);
   RUN_TEST(test_move_to_height_within_deadband_does_not_move);
   RUN_TEST(test_move_to_height_defers_until_a_height_is_known);
   RUN_TEST(test_move_to_height_rewakes_periodically_while_awaiting_report);
   RUN_TEST(test_move_to_height_gives_up_if_no_height_report_arrives);
   RUN_TEST(test_one_shot_command_wakes_then_sends_after_settle);
   RUN_TEST(test_one_shot_command_cancels_an_in_progress_move);
+  RUN_TEST(test_halt_cancels_the_desks_own_travel);
+  RUN_TEST(test_halt_skips_the_cancel_if_travel_ended_while_settling);
+  RUN_TEST(test_a_new_command_drops_a_pending_cancel);
+  RUN_TEST(test_a_second_stop_during_the_same_travel_sends_no_second_cancel);
+  RUN_TEST(test_a_new_travel_can_be_cancelled_again);
+  RUN_TEST(test_stop_after_a_preset_cancelled_the_travel_sends_no_cancel);
+  RUN_TEST(test_a_slider_command_replaces_a_queued_preset);
+  RUN_TEST(test_halt_leaves_an_idle_desk_alone);
+  RUN_TEST(test_halt_of_our_own_drive_only_stops_sending);
+  RUN_TEST(test_a_held_command_replaces_a_seek);
+  RUN_TEST(test_a_held_command_replaces_a_seek_awaiting_its_height);
+  RUN_TEST(test_busy_covers_every_kind_of_pending_work);
   RUN_TEST(test_stop_cancels_a_pending_one_shot);
   RUN_TEST(test_held_command_repeats_at_cadence_then_stops);
   RUN_TEST(test_seek_stops_early_by_fallback_coast_without_speed_estimate);

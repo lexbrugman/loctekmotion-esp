@@ -3,6 +3,8 @@
 #include <ArduinoJson.h>
 #include <LittleFS.h>
 
+#include "JsonFile.h"
+
 namespace {
 constexpr char kPath[] = "/motion.json";
 }  // namespace
@@ -10,13 +12,8 @@ constexpr char kPath[] = "/motion.json";
 namespace motion_store {
 
 bool load(DeskMotionPlanner::LearnedState& out) {
-  File f = LittleFS.open(kPath, "r");
-  if (!f) return false;
-
   JsonDocument doc;
-  const DeserializationError err = deserializeJson(doc, f);
-  f.close();
-  if (err) return false;
+  if (!json_file::load(kPath, doc)) return false;
 
   // Missing keys (e.g. a file written by an older firmware with a different
   // model) deserialize as 0, which setLearnedState sanitizes back to seeds.
@@ -37,12 +34,7 @@ bool save(const DeskMotionPlanner::LearnedState& state) {
   doc["dd"] = state.decel_down;
   doc["tu"] = state.tap_gain_up;
   doc["td"] = state.tap_gain_down;
-
-  File f = LittleFS.open(kPath, "w");
-  if (!f) return false;
-  const bool ok = serializeJson(doc, f) > 0;
-  f.close();
-  return ok;
+  return json_file::save(kPath, doc);
 }
 
 bool reset() {

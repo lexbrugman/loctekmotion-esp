@@ -1,0 +1,3 @@
+# Build tooling for CI and local use (pip install -r requirements.txt).
+# Pinned so builds are reproducible; Renovate keeps it current.
+platformio==6.2.0

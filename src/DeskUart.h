@@ -13,8 +13,8 @@
 // Presents the UART link to the desk's control box as a plain Stream,
 // regardless of how the platform implements it: the ESP8266 has only one
 // hardware UART (kept free here for USB debug logging), so the link runs
-// over SoftwareSerial; the ESP32 has several spare hardware UARTs, so it
-// uses one of those directly. DeskController only ever talks to stream().
+// over SoftwareSerial; the ESP32 uses its spare UART2, whose default pins
+// are where the link is wired. DeskController only ever talks to stream().
 class DeskUart {
  public:
   DeskUart(uint8_t rx_pin, uint8_t tx_pin);
