@@ -1,6 +1,9 @@
 #include "Platform.h"
 
-#if defined(ESP32)
+#if defined(ESP8266)
+#include <user_interface.h>
+#elif defined(ESP32)
+#include <esp_system.h>
 #include <esp_timer.h>
 #endif
 
@@ -46,6 +49,15 @@ void writeResetFlag(bool set) {
 #endif
 }
 
+bool resetByButton() {
+#if defined(ESP8266)
+  return ESP.getResetInfoPtr()->reason == REASON_EXT_SYS_RST;
+#else
+  const esp_reset_reason_t reason = esp_reset_reason();
+  return reason == ESP_RST_POWERON || reason == ESP_RST_EXT;
+#endif
+}
+
 uint64_t uptimeSeconds() {
 #if defined(ESP8266)
   return micros64() / 1000000;
@@ -58,16 +70,12 @@ std::unique_ptr<SecureClient> makeSecureClient() {
   auto client = std::unique_ptr<SecureClient>(new SecureClient());
   client->setInsecure();
 #if defined(ESP8266)
-  // Trim only the transmit buffer (our outbound traffic is a few hundred
-  // bytes of HTTP request headers either way) to ease the ESP8266's tighter
-  // heap budget; ESP32's mbedTLS-based client doesn't need or expose this.
-  // The receive side must stay at BearSSL's full 16 KiB default: a smaller
-  // one can't hold a full-size incoming TLS record, and the release-asset
-  // CDN serving the multi-hundred-KB firmware binary (unlike the GitHub
-  // Pages host this used to fetch from) sends some that large — shrinking
-  // it here reproducibly broke the firmware download with "connection lost"
-  // (HTTPC_ERROR_CONNECTION_LOST) while leaving the tiny version.txt check,
-  // whose replies always fit in a small record, unaffected.
+  // Trim only the transmit buffer (we send just HTTP request headers) to
+  // ease the ESP8266's tight heap; ESP32's mbedTLS client doesn't expose
+  // this. The receive buffer must stay at BearSSL's full 16 KiB: the
+  // release-asset CDN sends full-size TLS records, and a smaller buffer
+  // breaks the firmware download with HTTPC_ERROR_CONNECTION_LOST (the small
+  // version.txt replies are unaffected, which hides the problem).
   client->setBufferSizes(16384, 512);
 #endif
   return client;

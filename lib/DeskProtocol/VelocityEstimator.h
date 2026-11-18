@@ -14,10 +14,13 @@
 class VelocityEstimator {
  public:
   struct Config {
-    float fine_resolution_max;  // samples at/above this height (cm) are rejected
-    uint32_t window;            // trailing slope window (ms)
-    uint32_t min_span;          // minimum oldest..newest span for a valid slope (ms)
-    uint32_t max_sample_age;    // newest sample older than this -> invalid (ms)
+    // Not an aggregate: fill the fields in by name, never positionally.
+    constexpr Config() {}
+
+    float fine_resolution_max = 0.0f;  // samples at/above this height (cm) are rejected
+    uint32_t window = 0;               // trailing slope window (ms)
+    uint32_t min_span = 0;             // minimum oldest..newest span for a valid slope (ms)
+    uint32_t max_sample_age = 0;       // newest sample older than this -> invalid (ms)
   };
 
   explicit VelocityEstimator(Config config) : config_(config) {}

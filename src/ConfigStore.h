@@ -2,7 +2,9 @@
 
 #include <Arduino.h>
 
+#include <cstddef>
 #include <cstdint>
+#include <cstring>
 
 // Runtime device configuration entered via the captive portal and persisted to
 // LittleFS. Wi-Fi credentials themselves are stored by the ESP SDK / WiFiManager;
@@ -21,6 +23,14 @@ struct DeviceConfig {
 };
 
 namespace config_store {
+
+// Copy |value| into a fixed-size DeviceConfig field (truncating, always
+// terminated), or |fallback| if |value| is null or empty.
+template <size_t N>
+void setField(char (&field)[N], const char* value, const char* fallback = "") {
+  strncpy(field, value && value[0] ? value : fallback, N - 1);
+  field[N - 1] = '\0';
+}
 
 // Mount LittleFS (formats on first use). Returns false on failure.
 bool begin();

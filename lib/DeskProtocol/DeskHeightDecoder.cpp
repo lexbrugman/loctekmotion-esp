@@ -17,52 +17,55 @@ int DeskHeightDecoder::decodeDigit(uint8_t seg) {
   }
 }
 
-bool DeskHeightDecoder::feed(uint8_t byte) {
-  if (byte == kFrameStart) {
-    // A start byte always (re)synchronises the framer, even mid-frame.
+DeskHeightDecoder::Reading DeskHeightDecoder::feed(uint8_t byte) {
+  // Total frame size once LEN (buf_[1]) is in: start + LEN + LEN more bytes.
+  const size_t total = len_ >= 2 ? static_cast<size_t>(buf_[1]) + 2 : 0;
+  // The two checksum bytes may take any value, the start byte's included.
+  const bool in_checksum = total != 0 && len_ >= total - 3 && len_ < total - 1;
+
+  if (byte == kFrameStart && !(in_frame_ && in_checksum)) {
+    // Anywhere else a start byte (re)synchronises the framer, even mid-frame.
     in_frame_ = true;
     len_ = 0;
     buf_[len_++] = byte;
-    lock_display_ = false;
-    alarm_display_ = false;
-    return false;
+    return Reading::kNone;
   }
 
   if (!in_frame_) {
-    return false;  // waiting for a frame to begin
+    return Reading::kNone;  // waiting for a frame to begin
   }
 
-  if (len_ < kMaxFrame) {
-    buf_[len_++] = byte;
-  } else {
-    // Overlong frame: give up and wait for the next start byte.
-    in_frame_ = false;
-    return false;
+  buf_[len_++] = byte;
+
+  if (len_ == 2) {
+    // LEN just arrived: a frame that can't be valid (or wouldn't fit) is
+    // abandoned here, and the framer waits for the next start byte.
+    if (byte < kMinLen || static_cast<size_t>(byte) + 2 > kMaxFrame) in_frame_ = false;
+    return Reading::kNone;
   }
 
-  if (byte == kFrameEnd) {
-    in_frame_ = false;
-    return parseFrame();
-  }
+  if (len_ < static_cast<size_t>(buf_[1]) + 2) return Reading::kNone;  // frame still filling
 
-  return false;
+  in_frame_ = false;
+  return parseFrame();
 }
 
-bool DeskHeightDecoder::parseFrame() {
-  // Need at least: start, len, type, d1, d2, d3.
-  if (len_ < 6) return false;
+DeskHeightDecoder::Reading DeskHeightDecoder::parseFrame() {
+  if (buf_[len_ - 1] != kFrameEnd) return Reading::kNone;
+  // Checksum covers LEN through the last payload byte.
+  const uint16_t crc = desk_proto::crc16(buf_ + 1, len_ - 4);
+  if (buf_[len_ - 3] != (crc >> 8) || buf_[len_ - 2] != (crc & 0xff)) return Reading::kNone;
 
   const uint8_t msg_len = buf_[1];
   const uint8_t msg_type = buf_[2];
-  if (msg_type != kMsgTypeHeight) return false;
-  if (msg_len != 7 && msg_len != 10) return false;
+  if (msg_type != kMsgTypeHeight) return Reading::kNone;
+  if (msg_len != 7 && msg_len != 10) return Reading::kNone;
 
   // The desk shows "LOC" — digit bytes for L, o, C with the decimal-point bit
   // masked off — in place of the height while child lock is engaged.
   if ((buf_[3] & ~kDecimalBit) == 0x38 && (buf_[4] & ~kDecimalBit) == 0x5c &&
       (buf_[5] & ~kDecimalBit) == 0x39) {
-    lock_display_ = true;
-    return false;
+    return Reading::kLock;
   }
 
   // The sit-stand reminder alarm replaces the height with "=XX" (blinking):
@@ -70,8 +73,7 @@ bool DeskHeightDecoder::parseFrame() {
   // phase (blank leading digit) falls through to the zero/blank rejection
   // below, and anything else unrecognised is rejected as a height anyway.
   if ((buf_[3] & ~kDecimalBit) == 0x09) {
-    alarm_display_ = true;
-    return false;
+    return Reading::kAlarm;
   }
 
   const int d1 = decodeDigit(buf_[3]);
@@ -80,20 +82,20 @@ bool DeskHeightDecoder::parseFrame() {
 
   // The leading digit is never zero on these desks (travel is ~65-131 cm), so a
   // zero/blank there means a transitional or empty display - reject it.
-  if (d1 < 1 || d1 > 9) return false;
+  if (d1 < 1 || d1 > 9) return Reading::kNone;
   // A hyphen or unrecognised pattern in the lower digits means the handset is
   // mid-transition (e.g. showing "---"); skip until it settles.
-  if (d2 < 0 || d2 > 9) return false;
-  if (d3 < 0 || d3 > 9) return false;
+  if (d2 < 0 || d2 > 9) return Reading::kNone;
+  if (d3 < 0 || d3 > 9) return Reading::kNone;
 
   float value = d1 * 100.0f + d2 * 10.0f + d3;
   if (buf_[4] & kDecimalBit) {  // decimal point rides on the middle digit
     value /= 10.0f;
   }
 
-  if (value < kMinPlausible || value > kMaxPlausible) return false;
+  if (value < kMinPlausible || value > kMaxPlausible) return Reading::kNone;
 
   height_ = value;
   has_height_ = true;
-  return true;
+  return Reading::kHeight;
 }

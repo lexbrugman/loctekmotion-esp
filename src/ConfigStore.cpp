@@ -3,13 +3,10 @@
 #include <ArduinoJson.h>
 #include <LittleFS.h>
 
+#include "JsonFile.h"
+
 namespace {
 constexpr char kPath[] = "/config.json";
-
-void copyStr(char* dst, size_t cap, const char* src) {
-  strncpy(dst, src ? src : "", cap - 1);
-  dst[cap - 1] = '\0';
-}
 }  // namespace
 
 namespace config_store {
@@ -23,20 +20,15 @@ bool begin() {
 }
 
 bool load(DeviceConfig& out) {
-  File f = LittleFS.open(kPath, "r");
-  if (!f) return false;
-
   JsonDocument doc;
-  const DeserializationError err = deserializeJson(doc, f);
-  f.close();
-  if (err) return false;
+  if (!json_file::load(kPath, doc)) return false;
 
-  copyStr(out.mqtt_host, sizeof(out.mqtt_host), doc["mqtt_host"] | "");
-  out.mqtt_port = doc["mqtt_port"] | 1883;
-  copyStr(out.mqtt_user, sizeof(out.mqtt_user), doc["mqtt_user"] | "");
-  copyStr(out.mqtt_pass, sizeof(out.mqtt_pass), doc["mqtt_pass"] | "");
-  copyStr(out.device_id, sizeof(out.device_id), doc["device_id"] | "");
-  copyStr(out.device_name, sizeof(out.device_name), doc["device_name"] | "");
+  setField(out.mqtt_host, doc["mqtt_host"] | "");
+  out.mqtt_port = doc["mqtt_port"] | out.mqtt_port;  // DeviceConfig's default
+  setField(out.mqtt_user, doc["mqtt_user"] | "");
+  setField(out.mqtt_pass, doc["mqtt_pass"] | "");
+  setField(out.device_id, doc["device_id"] | "");
+  setField(out.device_name, doc["device_name"] | "");
   return true;
 }
 
@@ -48,12 +40,7 @@ bool save(const DeviceConfig& cfg) {
   doc["mqtt_pass"] = cfg.mqtt_pass;
   doc["device_id"] = cfg.device_id;
   doc["device_name"] = cfg.device_name;
-
-  File f = LittleFS.open(kPath, "w");
-  if (!f) return false;
-  const bool ok = serializeJson(doc, f) > 0;
-  f.close();
-  return ok;
+  return json_file::save(kPath, doc);
 }
 
 }  // namespace config_store

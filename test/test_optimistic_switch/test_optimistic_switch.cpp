@@ -89,6 +89,25 @@ void test_snap_back_publish_is_recorded() {
   TEST_ASSERT_FALSE(out);
 }
 
+void test_republish_repeats_what_the_broker_should_show() {
+  OptimisticSwitch s;
+  bool out = true;
+  TEST_ASSERT_FALSE(s.republish(out));  // nothing published yet
+
+  s.sync(false, 1000, out);
+  out = true;
+  TEST_ASSERT_TRUE(s.republish(out));
+  TEST_ASSERT_FALSE(out);
+  TEST_ASSERT_FALSE(s.sync(false, 1100, out));  // still nothing new to publish
+
+  // During an optimistic hold the broker should keep showing the request.
+  s.request(true, false, 2000, /*settle=*/500, out);
+  out = false;
+  TEST_ASSERT_TRUE(s.republish(out));
+  TEST_ASSERT_TRUE(out);
+  TEST_ASSERT_FALSE(s.sync(false, 2200, out));  // the hold is undisturbed
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_first_sync_always_publishes);
@@ -97,6 +116,7 @@ int main(int, char**) {
   RUN_TEST(test_failed_toggle_reverts_after_the_hold_expires);
   RUN_TEST(test_request_for_current_state_snaps_back_without_command);
   RUN_TEST(test_snap_back_publish_is_recorded);
+  RUN_TEST(test_republish_repeats_what_the_broker_should_show);
   UNITY_END();
   return 0;
 }

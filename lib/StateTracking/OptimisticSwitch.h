@@ -21,10 +21,9 @@
 //   toggle that didn't take visibly snaps back rather than lying forever.
 //
 // Every publish - including request()'s snap-back when the desk is already in
-// the requested state - is recorded as the last published value. Skipping
-// that bookkeeping is what once left the alarm switch stuck ON: a publish the
-// tracker didn't know about made it swallow the next real transition as
-// "already published".
+// the requested state - must be recorded as the last published value: one the
+// tracker doesn't know about makes it swallow the next real transition (it
+// once left the alarm switch stuck ON).
 //
 // Pure logic (callers pass the time in), free of any Arduino/MQTT dependency,
 // so it can be exercised by host-side unit tests.
@@ -47,6 +46,17 @@ class OptimisticSwitch {
     published_once_ = true;
     last_published_ = actual;
     out = actual;
+    return true;
+  }
+
+  // The broker may have lost its retained state (e.g. it restarted without
+  // persistence): after a reconnect, publish again what it should be showing.
+  // Returns true and sets |out| to that value — the requested state while an
+  // optimistic hold is running — or false when nothing has been published
+  // yet, in which case the next sync() publishes as usual.
+  bool republish(bool& out) const {
+    if (!published_once_) return false;
+    out = last_published_;
     return true;
   }
 

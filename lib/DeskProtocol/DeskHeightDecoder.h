@@ -3,13 +3,23 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "DeskCrc.h"
+
 // DeskHeightDecoder parses the UART byte stream coming *from* a LoctekMotion /
 // FlexiSpot control box and reconstructs the desk height shown on the handset's
 // 7-segment display.
 //
 // The control box frames its messages as:
 //
-//     0x9b  LEN  TYPE  <payload...>  0x9d
+//     0x9b  LEN  TYPE  <payload...>  CRC_HI  CRC_LO  0x9d
+//
+// LEN counts every byte after itself (TYPE through the 0x9d end byte), and the
+// checksum is a CRC-16/MODBUS over LEN, TYPE and the payload — the same
+// framing the command frames in DeskCommands.h use. Frames are delimited by
+// LEN rather than by scanning for the end byte (which may legitimately occur
+// inside the checksum), and a frame whose checksum doesn't match is dropped:
+// a bit error on the line can otherwise turn one valid digit into another
+// and report a plausible but wrong height.
 //
 // For a height report TYPE is 0x12 and LEN is 7 (some control boxes use 10).
 // The three display digits are payload bytes 1..3 (i.e. frame bytes 3, 4, 5),
@@ -21,23 +31,20 @@
 // exercised by host-side unit tests.
 class DeskHeightDecoder {
  public:
-  // Feed a single received byte. Returns true exactly when a new, valid height
-  // has been decoded; read it with height().
-  bool feed(uint8_t byte);
+  // What a completed display frame showed.
+  enum class Reading {
+    kNone,    // no frame completed, or one showing nothing usable
+    kHeight,  // a valid height; read it with height()
+    kLock,    // "LOC": shown in place of the height while child-locked
+    kAlarm,   // "=XX" (leading '=' = segments a+d, blinking): the sit-stand
+              // reminder alarm is armed
+  };
+
+  // Feed a single received byte; returns what the frame it completes showed.
+  Reading feed(uint8_t byte);
 
   float height() const { return height_; }
-  bool has_height() const { return has_height_; }
-
-  // True for exactly the feed() call that completes a frame showing "LOC" on
-  // the display — what the desk shows in place of the height while child lock
-  // is engaged.
-  bool isLockDisplay() const { return lock_display_; }
-
-  // True for exactly the feed() call that completes a frame whose leading
-  // digit is '=' (top+bottom segments, a+d) — the desk shows "=XX" (with the
-  // '=' blinking) in place of the height while the sit-stand reminder alarm
-  // is armed.
-  bool isAlarmDisplay() const { return alarm_display_; }
+  bool hasHeight() const { return has_height_; }
 
   // Plausibility window (cm). Frames decoding outside this band are rejected as
   // line noise. Deliberately wider than any real desk's travel.
@@ -57,15 +64,16 @@ class DeskHeightDecoder {
   // or kInvalid for an unrecognised / blank pattern.
   static int decodeDigit(uint8_t seg);
 
-  bool parseFrame();
+  Reading parseFrame();
 
+  // Longest frame accepted: start + LEN + the 10 bytes a len-10 report holds.
   static constexpr size_t kMaxFrame = 12;
+  // Shortest LEN that still holds TYPE, the two checksum bytes and the end.
+  static constexpr uint8_t kMinLen = 4;
   uint8_t buf_[kMaxFrame] = {0};
   size_t len_ = 0;
   bool in_frame_ = false;
 
   float height_ = 0.0f;
   bool has_height_ = false;
-  bool lock_display_ = false;
-  bool alarm_display_ = false;
 };

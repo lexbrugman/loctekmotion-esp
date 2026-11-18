@@ -2,9 +2,10 @@
 
 #include "DeskMotionPlanner.h"
 
-// Persists DeskMotionPlanner's learned state (coast margins and correction tap
-// rate) to LittleFS so convergence survives power cycles. Follows the same
-// pattern as ConfigStore: stateless free functions, JSON-backed flat file.
+// Persists DeskMotionPlanner's learned state (the per-direction terminal
+// speed, coast deceleration and tap gain — see MotionModel) to LittleFS so
+// convergence survives power cycles. Stateless free functions over a JSON
+// file, like ConfigStore.
 namespace motion_store {
 
 // Populate |out| from the stored state. Returns false if the file is absent
@@ -12,8 +13,8 @@ namespace motion_store {
 // is left unchanged and the planner's compile-time seeds should be used.
 bool load(DeskMotionPlanner::LearnedState& out);
 
-// Write the current learned state to flash. Called by DeskController after
-// each completed seek so the learned values are always up to date.
+// Write the learned state to flash. DeskController calls this when a seek
+// ends and the learned values changed.
 bool save(const DeskMotionPlanner::LearnedState& state);
 
 // Delete the stored state so the planner starts fresh from its compile-time

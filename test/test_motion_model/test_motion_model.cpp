@@ -9,27 +9,31 @@
 
 namespace {
 
-constexpr MotionModel::Tunables kTunables{
-    /*seed_terminal_speed=*/4.0f,
-    /*seed_decel=*/2.0f,
-    /*seed_tap_gain=*/25.0f,
-    /*speed_learning_rate=*/0.5f,
-    /*decel_learning_rate=*/0.5f,
-    /*tap_learning_rate=*/0.5f,
-    /*min_terminal_speed=*/0.5f,
-    /*max_terminal_speed=*/10.0f,
-    /*min_decel=*/0.2f,
-    /*max_decel=*/20.0f,
-    /*min_tap_gain=*/5.0f,
-    /*max_tap_gain=*/100.0f,
-};
+constexpr MotionModel::Tunables kTunables = [] {
+  MotionModel::Tunables s;
+  s.seed_terminal_speed = 4.0f;
+  s.seed_decel = 2.0f;
+  s.seed_tap_gain = 25.0f;
+  s.speed_learning_rate = 0.5f;
+  s.decel_learning_rate = 0.5f;
+  s.tap_learning_rate = 0.5f;
+  s.min_terminal_speed = 0.5f;
+  s.max_terminal_speed = 10.0f;
+  s.min_decel = 0.2f;
+  s.max_decel = 20.0f;
+  s.min_tap_gain = 5.0f;
+  s.max_tap_gain = 100.0f;
+  return s;
+}();
 
-constexpr VelocityEstimator::Config kEstimatorConfig{
-    /*fine_resolution_max=*/100.0f,
-    /*window=*/600,
-    /*min_span=*/250,
-    /*max_sample_age=*/400,
-};
+constexpr VelocityEstimator::Config kEstimatorConfig = [] {
+  VelocityEstimator::Config s;
+  s.fine_resolution_max = 100.0f;
+  s.window = 600;
+  s.min_span = 250;
+  s.max_sample_age = 400;
+  return s;
+}();
 
 }  // namespace
 

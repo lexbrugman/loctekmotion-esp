@@ -22,15 +22,18 @@
 class MotionModel {
  public:
   struct Tunables {
-    float seed_terminal_speed;  // cm/s
-    float seed_decel;           // cm/s²
-    float seed_tap_gain;        // cm/s²
-    float speed_learning_rate;
-    float decel_learning_rate;
-    float tap_learning_rate;
-    float min_terminal_speed, max_terminal_speed;
-    float min_decel, max_decel;
-    float min_tap_gain, max_tap_gain;
+    // Not an aggregate: fill the fields in by name, never positionally.
+    constexpr Tunables() {}
+
+    float seed_terminal_speed = 0.0f;  // cm/s
+    float seed_decel = 0.0f;           // cm/s²
+    float seed_tap_gain = 0.0f;        // cm/s²
+    float speed_learning_rate = 0.0f;
+    float decel_learning_rate = 0.0f;
+    float tap_learning_rate = 0.0f;
+    float min_terminal_speed = 0.0f, max_terminal_speed = 0.0f;
+    float min_decel = 0.0f, max_decel = 0.0f;
+    float min_tap_gain = 0.0f, max_tap_gain = 0.0f;
   };
 
   // Snapshot of all learned values — the persistence exchange format.
@@ -41,6 +44,14 @@ class MotionModel {
     float decel_down = 0.0f;
     float tap_gain_up = 0.0f;
     float tap_gain_down = 0.0f;
+
+    bool operator==(const State& o) const {
+      return terminal_speed_up == o.terminal_speed_up &&
+             terminal_speed_down == o.terminal_speed_down && decel_up == o.decel_up &&
+             decel_down == o.decel_down && tap_gain_up == o.tap_gain_up &&
+             tap_gain_down == o.tap_gain_down;
+    }
+    bool operator!=(const State& o) const { return !(*this == o); }
   };
 
   explicit MotionModel(Tunables tunables) : tunables_(tunables) { reset(); }

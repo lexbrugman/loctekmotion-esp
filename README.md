@@ -30,7 +30,9 @@ To re-run setup later: press the **Wi-Fi setup** button in Home Assistant
 (clears Wi-Fi config and reboots into the portal), or - if a config mistake
 has made the device unreachable - double-press the board's **reset (RST)**
 button within a few seconds, which triggers the same reset without needing
-MQTT. Either way the portal pre-fills the MQTT fields with the current
+MQTT (only button presses count - the device restarting itself, e.g. after
+the portal times out while your router is down, never clears the Wi-Fi
+config). Either way the portal pre-fills the MQTT fields with the current
 values, so you can fix a bad host/port/credential in place.
 
 ### Running more than one
@@ -50,13 +52,14 @@ serves any number of them. Device name is just the friendly label shown in HA.
 | Height | sensor | decoded desk height |
 | WiFi signal | sensor | diagnostic |
 | Last restart | sensor | diagnostic; when the device last restarted |
-| Stop | button | halt any in-progress move |
+| Stop | button | halt a move: slider seeks, and preset/sit/stand travel (by pressing a preset key, which cancels it - as on the handset); can't stop a button held on the handset |
 | Preset 1/2, Sit, Stand | button | stored positions |
 | Memory, Wake screen | button | |
 | Child lock | switch | tracks the desk's real state (the handset's "LOC" display) |
 | Alarm | switch | sit-stand reminder; tracks the desk's real state (the handset's blinking "=XX" display); off is sent as the 3 s hold the desk requires |
+| Cruise speed, Coast deceleration, Tap gain (up/down) | sensor | diagnostic, disabled by default; the learned motion model, for watching it converge (see [below](#height-seeking--self-calibration)) |
 | Reset calibration | button | wipe the learned motion model (see [below](#height-seeking--self-calibration)) |
-| Firmware | update | titled with the OTA channel and linked to its release page; Install downloads and flashes the latest |
+| Firmware | update | titled with the OTA channel and linked to its release page; Install downloads and flashes the latest, with a progress bar |
 | Check for updates | button | re-read the OTA channel's version now instead of waiting for the next poll |
 | Wi-Fi setup | button | reboot into the captive portal |
 | Restart | button | reboot the ESP |
@@ -65,6 +68,10 @@ The device has no clock, so for **Last restart** it publishes its uptime and
 Home Assistant converts that into a timestamp. It sends it only when it
 connects and when Home Assistant restarts, so the entity's state changes only
 on a restart.
+
+All state is published retained, and sent again whenever the device
+reconnects to the broker, so a broker that restarts without persistence
+doesn't leave entities stuck unknown or unavailable.
 
 Entities removed from the firmware disappear from Home Assistant on their own:
 after connecting, the device deletes any retained discovery config under its
@@ -119,14 +126,14 @@ API) differences behind small board-agnostic shims.
 build tool (not an IDE - the IDE is an optional VS Code extension we don't use):
 
 ```bash
-pip install platformio
+pip install -r requirements.txt   # PlatformIO, at the version CI builds with
 pio run -e d1_mini  -t upload    # flash a Wemos D1 mini (ESP8266) over USB
 pio run -e esp32dev -t upload    # flash an ESP32 dev board over USB
 pio device monitor               # watch debug logs (115200)
 ```
 
-Run the unit tests - protocol decoder, motion model and motion planner - on
-your machine (no hardware needed):
+Run the unit tests - protocol decoder, motion model, motion planner and the
+state-tracking helpers - on your machine (no hardware needed):
 
 ```bash
 pio test -e native
@@ -134,10 +141,10 @@ pio test -e native
 
 ## Over-the-air updates
 
-CI builds and tests both boards on every push and pull request (see
-[`firmware.yml`](.github/workflows/firmware.yml)), and publishes a **rolling
-release** tagged `<branch>-latest` - overwritten on each build, with two
-binaries per board attached - that's the OTA channel devices poll:
+CI builds and tests both boards on every push and on pull requests from forks
+(see [`firmware.yml`](.github/workflows/firmware.yml)), and publishes a
+**rolling release** tagged `<branch>-latest` - updated in place on each build,
+with two binaries per board attached - that's the OTA channel devices poll:
 
 ```
 https://github.com/lexbrugman/loctekmotion-esp/releases/download/master-latest/firmware-d1_mini.bin
@@ -157,7 +164,8 @@ esptool.py write_flash 0x0 firmware-esp32dev-full.bin
 - On boot and every 6 hours the device fetches `version.txt` and reports it to
   the **Firmware** update entity in Home Assistant - it does not install
   anything on its own. The **Check for updates** button re-reads it on demand
-  instead of waiting for the next poll. Pressing **Install** on the Firmware
+  instead of waiting for the next poll. Checks and installs block the
+  firmware for a few seconds, so they wait until the desk has stopped moving. Pressing **Install** on the Firmware
   entity downloads and flashes its own board's `firmware-*.bin`
   (`cfg::kFirmwareAsset` - never the other board's, since that would brick it).
 - The build version (`-DFW_VERSION`) is the short commit SHA, so the running

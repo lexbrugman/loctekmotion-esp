@@ -41,22 +41,36 @@ inline auto& updater() {
 #endif
 }
 
-// A TLS client suitable for fetching OTA assets from GitHub. Certificate
-// validation is intentionally skipped (see UpdateManager.cpp for why).
+// Keep the MQTT connection open while an OTA update runs, so HA keeps the
+// device available and receives the install progress. The ESP8266 driver
+// otherwise closes every other socket when the download starts (to free heap),
+// which makes the broker publish our "offline" last will; the ESP32 driver
+// leaves them alone.
+inline void keepConnectionsDuringUpdate() {
+#if defined(ESP8266)
+  ESPhttpUpdate.closeConnectionsOnUpdate(false);
+#endif
+}
+
+// A TLS client for fetching OTA assets from GitHub. Certificate validation
+// is skipped (setInsecure) — no CA store is bundled with the firmware — so
+// the connection is encrypted but the server is not authenticated.
 std::unique_ptr<SecureClient> makeSecureClient();
 
 // Seconds since boot, from a 64-bit microsecond clock so it doesn't wrap the
 // way the 32-bit millis() does after 49.7 days.
 uint64_t uptimeSeconds();
 
-// A single persistent flag backed by RTC memory: it survives a software or
-// external (RST-button) reset, but — unlike flash-backed storage — is wiped
-// by a power loss. That's exactly the distinction main.cpp's double-reset
-// detection needs to tell a deliberate double press apart from someone
-// simply power-cycling the desk (see config.h's kDoubleResetWindow). The
-// underlying mechanism (ESP.rtcUserMemory* vs. an RTC_NOINIT_ATTR variable)
-// differs between the cores; this hides that behind a plain bool.
+// A single flag in RTC memory: it survives a reset but, unlike flash, not a
+// power loss (for provisioning::checkDoubleReset). The cores differ in how
+// (ESP.rtcUserMemory* vs. an RTC_NOINIT_ATTR variable); this hides that.
 bool readResetFlag();
 void writeResetFlag(bool set);
+
+// True when this boot could have been caused by the reset button rather than
+// the firmware restarting itself (ESP.restart(), a crash, a watchdog). The
+// ESP32's EN button reads back as a power-on, so power-ons count too — the
+// RTC flag above already tells those apart.
+bool resetByButton();
 
 }  // namespace platform

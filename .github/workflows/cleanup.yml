@@ -1,15 +1,11 @@
 name: Cleanup
 
-# Firmware CI (firmware.yml) creates per-branch releases ("<branch>-latest"
-# OTA channels and "<branch>-<timestamp>-<sha>" archives) that nothing
-# removes when the branch goes away. The "delete" trigger prunes a branch's releases the
-# moment it is deleted; the "release" trigger removes the git tag left
-# behind when a release is deleted by hand (GitHub keeps the tag when a
-# release is deleted from the UI/API). Each event runs exactly one job, and
-# the release deletions prune-releases performs here run under GITHUB_TOKEN
-# — which never triggers other workflow runs — so the two jobs cannot end
-# up running concurrently. Both triggers only fire from the workflow file
-# on the default branch.
+# firmware.yml creates per-branch releases ("<branch>-latest" OTA channels and
+# "<branch>-<timestamp>-<sha>" archives). "delete" prunes a branch's releases
+# when the branch is deleted; "release" removes the tag GitHub leaves behind
+# when a release is deleted by hand. Deletions made here run under
+# GITHUB_TOKEN, which never triggers other runs, so the jobs can't overlap.
+# Both triggers only fire from the workflow file on the default branch.
 on:
   delete:
   release:
@@ -36,11 +32,9 @@ jobs:
         run: |
           gh release list --limit 1000 --json tagName -q '.[].tagName' --repo "$GITHUB_REPOSITORY" |
           while read -r tag; do
-            # Only touch CI-created tags ("<branch>-latest" channels and
-            # "<branch>-<timestamp>-<sha>" archives, see firmware.yml); anything
-            # hand-made (e.g. "v1.0") is left alone. Branch names are sanitized
-            # the same way firmware.yml builds release tags (slashes become
-            # dashes).
+            # Only CI-created tags (see above); hand-made ones like "v1.0" are
+            # left alone. Branch names are sanitized as in firmware.yml (slashes
+            # become dashes).
             [[ "$tag" =~ ^(.+)-latest$ ]] ||
               [[ "$tag" =~ ^(.+)-[0-9]{8}-[0-9]{6}-[0-9a-f]{7,40}$ ]] ||
               continue
@@ -60,13 +54,11 @@ jobs:
         env:
           TAG: ${{ github.event.release.tag_name }}
         run: |
-          # Only touch CI-created tags ("<branch>-latest" channels and
-          # "<branch>-<timestamp>-<sha>" archives, see firmware.yml); anything
-          # hand-made (e.g. "v1.0") is left alone.
+          # Only CI-created tags; hand-made ones like "v1.0" are left alone.
           [[ "$TAG" =~ ^(.+)-([0-9a-f]{7,40}|latest)$ ]] || exit 0
           # A release may exist again for this tag by the time we run (e.g.
-          # the rolling "<branch>-latest" channel is deleted and immediately
-          # recreated on every push) — leave such tags alone.
+          # a re-run of a default-branch build deletes and immediately
+          # recreates that commit's archive release) — leave such tags alone.
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "Release exists again for $TAG; leaving tag in place"
             exit 0
