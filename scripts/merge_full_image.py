@@ -25,7 +25,7 @@ def full_image(source, target, env):
     env.Execute(" ".join([
         '"$OBJCOPY"',
         "--chip", env.BoardConfig().get("build.mcu"),
-        "merge_bin", "-o", '"%s"' % out,
+        "merge-bin", "-o", '"%s"' % out,
     ] + ['"%s"' % i for i in images]))
 
 
