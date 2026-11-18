@@ -105,7 +105,7 @@ void handleCommand(const String& object, const String& payload) {
 }  // namespace
 
 void setup() {
-  Serial.begin(115200);
+  platform::beginDebugSerial(115200);
   Serial.println(F("\nLoctekMotion desk controller starting"));
 
   provisioning::checkDoubleReset();

@@ -52,6 +52,17 @@ inline void keepConnectionsDuringUpdate() {
 #endif
 }
 
+// Start the USB debug log. Nothing reads from it, so on the ESP8266 it runs
+// transmit-only, which spares the heap the receive buffer; the ESP32 core has
+// no such mode.
+inline void beginDebugSerial(uint32_t baud) {
+#if defined(ESP8266)
+  Serial.begin(baud, SERIAL_8N1, SERIAL_TX_ONLY);
+#else
+  Serial.begin(baud);
+#endif
+}
+
 // A TLS client for fetching OTA assets from GitHub. Certificate validation
 // is skipped (setInsecure) — no CA store is bundled with the firmware — so
 // the connection is encrypted but the server is not authenticated.
