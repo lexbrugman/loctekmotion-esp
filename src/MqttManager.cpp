@@ -30,6 +30,12 @@ constexpr CalibrationSensor kCalibrationSensors[] = {
     {"tap_gain_down", "Tap gain down", "/s²", &MotionModel::State::tap_gain_down},
 };
 
+// The component every calibration sensor is published under.
+constexpr char kCalibrationComponent[] = "sensor";
+
+// fill() of every button: the payload a press sends.
+void press(JsonDocument& d, const MqttManager&) { d["payload_press"] = "PRESS"; }
+
 // Suffixes of MqttManager::Topic, in enum order.
 constexpr const char* kTopicSuffixes[] = {
     "height", "target",    "fw_latest", "fw_installed",       "wifi",        "uptime",
@@ -89,108 +95,109 @@ bool MqttManager::reconnect() {
   return ok;
 }
 
+// Every entity this firmware defines, besides the calibration sensors:
+// announce() publishes their discovery configs, and definesEntity() checks
+// the broker's retained ones against them. Each gets a state and/or command
+// topic, an icon and a category from its row; fill() adds the keys
+// specific to it. movement marks entities that issue movement commands the
+// desk ignores while child-locked: they're gated on the
+// movement-availability topic as well (see publishDiscoveryEntity).
+struct MqttManager::Entity {
+  const char* component;
+  const char* object;
+  const char* name;
+  Topic state;          // or kNoState
+  const char* command;  // command-topic suffix, or nullptr
+  const char* icon;     // or nullptr
+  const char* category;  // "config" / "diagnostic", or nullptr
+  bool movement;
+  void (*fill)(JsonDocument& doc, const MqttManager& m);
+};
+
+const MqttManager::Entity MqttManager::kEntities[] = {
+    {"sensor", "height", "Height", Topic::kHeight, nullptr, "mdi:desk", nullptr, false,
+     [](JsonDocument& d, const MqttManager&) {
+       d["unit_of_measurement"] = cfg::kHeightUnit;
+       d["device_class"] = "distance";
+       d["state_class"] = "measurement";
+       d["suggested_display_precision"] = 1;
+     }},
+    {"sensor", "wifi_signal", "WiFi signal", Topic::kWifi, nullptr, nullptr, "diagnostic",
+     false,
+     [](JsonDocument& d, const MqttManager&) {
+       d["unit_of_measurement"] = "dBm";
+       d["device_class"] = "signal_strength";
+       d["state_class"] = "measurement";
+     }},
+    // The device has no clock, so it publishes its uptime and HA turns that
+    // into the moment it restarted. Only sent on connect and when HA
+    // restarts (see publishUptimeIfDue), so the state changes only on a
+    // restart.
+    {"sensor", "last_restart", "Last restart", Topic::kUptime, nullptr, nullptr,
+     "diagnostic", false,
+     [](JsonDocument& d, const MqttManager&) {
+       d["device_class"] = "timestamp";
+       d["value_template"] =
+           "{{ (now() - timedelta(seconds=value|int)).replace(microsecond=0).isoformat() }}";
+     }},
+    {"number", "target_height", "Target height", Topic::kTarget, "target",
+     "mdi:arrow-up-down", nullptr, true,
+     [](JsonDocument& d, const MqttManager&) {
+       d["min"] = cfg::kMinHeight;
+       d["max"] = cfg::kMaxHeight;
+       d["step"] = 0.1;
+       d["unit_of_measurement"] = cfg::kHeightUnit;
+       d["device_class"] = "distance";
+       d["mode"] = "slider";
+     }},
+    // installed_version is not a discovery-time field for this platform
+    // (HA's MQTT update schema silently drops unknown keys) - it has to
+    // come from state_topic's JSON payload (see publishFirmwareState).
+    {"update", "firmware", "Firmware", Topic::kFirmwareInstalled, "update", nullptr,
+     "config", false,
+     [](JsonDocument& d, const MqttManager& m) {
+       d["latest_version_topic"] = m.topic(Topic::kFirmwareLatest);
+       d["payload_install"] = "PRESS";
+       d["device_class"] = "firmware";
+       d["title"] = cfg::kOtaChannel;
+       d["release_url"] = cfg::kOtaReleaseUrl;
+     }},
+    {"switch", "childlock", "Child lock", Topic::kChildLock, "childlock",
+     "mdi:account-lock", "config", false, nullptr},
+    // Sit-stand reminder alarm: the desk reflects it on its display, so its
+    // real state is trackable like child lock (see DisplayState).
+    {"switch", "alarm", "Alarm", Topic::kAlarm, "alarm", "mdi:alarm", nullptr, true,
+     nullptr},
+    // Halts a slider seek, or cancels preset/sit/stand travel the desk is
+    // making on its own (see DeskMotionPlanner::halt).
+    {"button", "stop", "Stop", kNoState, "stop", "mdi:stop", nullptr, true, press},
+    {"button", "preset1", "Preset 1", kNoState, "preset1", "mdi:numeric-1-box", nullptr,
+     true, press},
+    {"button", "preset2", "Preset 2", kNoState, "preset2", "mdi:numeric-2-box", nullptr,
+     true, press},
+    {"button", "sit", "Sit", kNoState, "sit", "mdi:chair-rolling", nullptr, true, press},
+    {"button", "stand", "Stand", kNoState, "stand", "mdi:human-handsup", nullptr, true,
+     press},
+    {"button", "memory", "Memory", kNoState, "memory", "mdi:alpha-m-box", "config", true,
+     press},
+    {"button", "wake", "Wake screen", kNoState, "wake", "mdi:gesture-tap-button", "config",
+     false, press},
+    {"button", "calibration_reset", "Reset calibration", kNoState, "calibration_reset",
+     "mdi:restore", "config", false, press},
+    // Re-reads the OTA channel's version now instead of waiting for the
+    // next periodic poll; refreshes the Firmware entity without installing.
+    {"button", "check_update", "Check for updates", kNoState, "check_update",
+     "mdi:cloud-search", "config", false, press},
+    {"button", "configure", "Wi-Fi setup", kNoState, "configure", "mdi:wifi-cog", "config",
+     false, press},
+    {"button", "restart", "Restart", kNoState, "restart", "mdi:restart", "config", false,
+     press},
+};
+
 void MqttManager::announce() {
-  published_.clear();
   mqtt_.publish(avail_top_.c_str(), "online", true);
   mqtt_.subscribe((cmd_prefix_ + "#").c_str());
 
-  // Every entity this firmware defines. Each gets a state and/or command
-  // topic, an icon and a category from its row; fill() adds the keys
-  // specific to it. movement marks entities that issue movement commands the
-  // desk ignores while child-locked: they're gated on the
-  // movement-availability topic as well (see publishDiscoveryEntity).
-  struct Entity {
-    const char* component;
-    const char* object;
-    const char* name;
-    Topic state;          // Topic::kCount = no state topic
-    const char* command;  // command-topic suffix, or nullptr
-    const char* icon;     // or nullptr
-    const char* category;  // "config" / "diagnostic", or nullptr
-    bool movement;
-    void (*fill)(JsonDocument& doc, const MqttManager& m);
-  };
-  constexpr Topic kNoState = Topic::kCount;
-  const auto press = [](JsonDocument& d, const MqttManager&) { d["payload_press"] = "PRESS"; };
-  static const Entity kEntities[] = {
-      {"sensor", "height", "Height", Topic::kHeight, nullptr, "mdi:desk", nullptr, false,
-       [](JsonDocument& d, const MqttManager&) {
-         d["unit_of_measurement"] = cfg::kHeightUnit;
-         d["device_class"] = "distance";
-         d["state_class"] = "measurement";
-         d["suggested_display_precision"] = 1;
-       }},
-      {"sensor", "wifi_signal", "WiFi signal", Topic::kWifi, nullptr, nullptr, "diagnostic",
-       false,
-       [](JsonDocument& d, const MqttManager&) {
-         d["unit_of_measurement"] = "dBm";
-         d["device_class"] = "signal_strength";
-         d["state_class"] = "measurement";
-       }},
-      // The device has no clock, so it publishes its uptime and HA turns that
-      // into the moment it restarted. Only sent on connect and when HA
-      // restarts (see publishUptimeIfDue), so the state changes only on a
-      // restart.
-      {"sensor", "last_restart", "Last restart", Topic::kUptime, nullptr, nullptr,
-       "diagnostic", false,
-       [](JsonDocument& d, const MqttManager&) {
-         d["device_class"] = "timestamp";
-         d["value_template"] =
-             "{{ (now() - timedelta(seconds=value|int)).replace(microsecond=0).isoformat() }}";
-       }},
-      {"number", "target_height", "Target height", Topic::kTarget, "target",
-       "mdi:arrow-up-down", nullptr, true,
-       [](JsonDocument& d, const MqttManager&) {
-         d["min"] = cfg::kMinHeight;
-         d["max"] = cfg::kMaxHeight;
-         d["step"] = 0.1;
-         d["unit_of_measurement"] = cfg::kHeightUnit;
-         d["device_class"] = "distance";
-         d["mode"] = "slider";
-       }},
-      // installed_version is not a discovery-time field for this platform
-      // (HA's MQTT update schema silently drops unknown keys) - it has to
-      // come from state_topic's JSON payload, published after the table.
-      {"update", "firmware", "Firmware", Topic::kFirmwareInstalled, "update", nullptr,
-       "config", false,
-       [](JsonDocument& d, const MqttManager& m) {
-         d["latest_version_topic"] = m.topic(Topic::kFirmwareLatest);
-         d["payload_install"] = "PRESS";
-         d["device_class"] = "firmware";
-         d["title"] = cfg::kOtaChannel;
-         d["release_url"] = cfg::kOtaReleaseUrl;
-       }},
-      {"switch", "childlock", "Child lock", Topic::kChildLock, "childlock",
-       "mdi:account-lock", "config", false, nullptr},
-      // Sit-stand reminder alarm: the desk reflects it on its display, so its
-      // real state is trackable like child lock (see DisplayState).
-      {"switch", "alarm", "Alarm", Topic::kAlarm, "alarm", "mdi:alarm", nullptr, true,
-       nullptr},
-      // Halts a slider seek, or cancels preset/sit/stand travel the desk is
-      // making on its own (see DeskMotionPlanner::halt).
-      {"button", "stop", "Stop", kNoState, "stop", "mdi:stop", nullptr, true, press},
-      {"button", "preset1", "Preset 1", kNoState, "preset1", "mdi:numeric-1-box", nullptr,
-       true, press},
-      {"button", "preset2", "Preset 2", kNoState, "preset2", "mdi:numeric-2-box", nullptr,
-       true, press},
-      {"button", "sit", "Sit", kNoState, "sit", "mdi:chair-rolling", nullptr, true, press},
-      {"button", "stand", "Stand", kNoState, "stand", "mdi:human-handsup", nullptr, true,
-       press},
-      {"button", "memory", "Memory", kNoState, "memory", "mdi:alpha-m-box", "config", true,
-       press},
-      {"button", "wake", "Wake screen", kNoState, "wake", "mdi:gesture-tap-button", "config",
-       false, press},
-      {"button", "calibration_reset", "Reset calibration", kNoState, "calibration_reset",
-       "mdi:restore", "config", false, press},
-      // Re-reads the OTA channel's version now instead of waiting for the
-      // next periodic poll; refreshes the Firmware entity without installing.
-      {"button", "check_update", "Check for updates", kNoState, "check_update",
-       "mdi:cloud-search", "config", false, press},
-      {"button", "configure", "Wi-Fi setup", kNoState, "configure", "mdi:wifi-cog", "config",
-       false, press},
-      {"button", "restart", "Restart", kNoState, "restart", "mdi:restart", "config", false,
-       press},
-  };
   for (const Entity& e : kEntities) {
     JsonDocument doc;
     if (e.state != kNoState) doc["state_topic"] = topic(e.state);
@@ -217,12 +224,12 @@ void MqttManager::announce() {
     doc["entity_category"] = "diagnostic";
     doc["enabled_by_default"] = false;
     doc["icon"] = "mdi:tune-variant";
-    publishDiscoveryEntity("sensor", c.key, c.name, doc);
+    publishDiscoveryEntity(kCalibrationComponent, c.key, c.name, doc);
   }
 
   // After every publishDiscoveryEntity() above: subscribing replays all
   // retained configs under this node ID, and onDiscoveryMessage() deletes
-  // the ones not in published_.
+  // the ones for entities this firmware doesn't define.
   mqtt_.subscribe((String(cfg::kDiscoveryPrefix) + "/+/" + config_.device_id +
                    "/+/config").c_str());
   // HA's birth message, see onDiscoveryMessage().
@@ -273,7 +280,6 @@ void MqttManager::publishDiscoveryEntity(const char* component, const char* obje
   if (!mqtt_.publish(topic.c_str(), payload.c_str(), true)) {
     Serial.printf("[mqtt] discovery publish failed: %s\n", topic.c_str());
   }
-  published_.push_back(String(component) + "/" + object);
 }
 
 void MqttManager::onMessage(char* topic, const uint8_t* payload, unsigned int length) {
@@ -320,8 +326,7 @@ void MqttManager::onDiscoveryMessage(const String& subtopic, const uint8_t* payl
 
   const String component = subtopic.substring(0, node_start - 1);
   const String object = subtopic.substring(object_start, config_start);
-  for (const String& entity : published_)
-    if (entity == component + "/" + object) return;
+  if (definesEntity(component, object)) return;
 
   // topic/payload point into PubSubClient's buffer, which publishing reuses;
   // subtopic is a copy, so it's safe to build the topic from it.
@@ -329,6 +334,17 @@ void MqttManager::onDiscoveryMessage(const String& subtopic, const uint8_t* payl
   mqtt_.publish(topic.c_str(), "", true);
   Serial.printf("[mqtt] removed retired HA entity %s/%s\n", component.c_str(),
                 object.c_str());
+}
+
+bool MqttManager::definesEntity(const String& component, const String& object) {
+  for (const Entity& e : kEntities) {
+    if (component == e.component && object == e.object) return true;
+  }
+  if (component != kCalibrationComponent) return false;
+  for (const auto& c : kCalibrationSensors) {
+    if (object == c.key) return true;
+  }
+  return false;
 }
 
 // Not retained: HA converts the uptime to a timestamp using the time it

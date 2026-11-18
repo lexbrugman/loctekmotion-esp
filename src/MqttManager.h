@@ -5,7 +5,6 @@
 #include <PubSubClient.h>
 
 #include <functional>
-#include <vector>
 
 #include "ConfigStore.h"
 #include "DeferredActions.h"
@@ -84,6 +83,8 @@ class MqttManager {
   // subtopic is the topic below cfg::kDiscoveryPrefix.
   void onDiscoveryMessage(const String& subtopic, const uint8_t* payload,
                           unsigned int length);
+  // Whether announce() publishes a discovery config for <component>/<object>.
+  static bool definesEntity(const String& component, const String& object);
   // Publishes the uptime once uptime_countdown_ is due; see announce().
   void publishUptimeIfDue();
 
@@ -93,10 +94,6 @@ class MqttManager {
   ConnectHandler connect_handler_;
   DeviceConfig config_;
   Countdown retry_;  // throttles reconnect attempts; unarmed until the first
-
-  // "<component>/<object>" of every discovery config published since
-  // connecting; any other retained config under this node ID is deleted.
-  std::vector<String> published_;
   Countdown uptime_countdown_;
 
   // Every topic below lives under cfg::kTopicNamespace + "/" + device id.
@@ -120,10 +117,16 @@ class MqttManager {
     kCalibration,
     kCount,
   };
+  static constexpr Topic kNoState = Topic::kCount;  // Entity::state when it has none
   const String& topic(Topic t) const { return topics_[static_cast<size_t>(t)]; }
   // Every state publish goes through here.
   bool publish(Topic t, const char* payload, bool retained = true) {
     return mqtt_.publish(topic(t).c_str(), payload, retained);
   }
   String topics_[static_cast<size_t>(Topic::kCount)];
+
+  // The entity table (see MqttManager.cpp): one row per entity announce()
+  // publishes, other than the calibration sensors.
+  struct Entity;
+  static const Entity kEntities[];
 };
