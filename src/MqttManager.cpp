@@ -220,10 +220,6 @@ void MqttManager::announce() {
     publishDiscoveryEntity("sensor", c.key, c.name, doc);
   }
 
-  // The installed version is constant for the life of the build, so publish
-  // it once here (retained, like availability) rather than periodically.
-  publishFirmwareState();
-
   // After every publishDiscoveryEntity() above: subscribing replays all
   // retained configs under this node ID, and onDiscoveryMessage() deletes
   // the ones not in published_.
@@ -357,15 +353,23 @@ void MqttManager::publishTarget(float cm) {
 void MqttManager::publishFirmwareLatest(const String& version) {
   publish(Topic::kFirmwareLatest, version.c_str());
 }
-void MqttManager::publishFirmwareState(int percent) {
+void MqttManager::publishFirmwareState(const String& url) {
   JsonDocument doc;
   doc["installed_version"] = cfg::kSwVersion;
-  doc["in_progress"] = percent >= 0;
-  if (percent >= 0) {
-    doc["update_percentage"] = percent;
-  } else {
-    doc["update_percentage"] = nullptr;  // resets HA's progress state
-  }
+  doc["release_url"] = url;
+  doc["in_progress"] = false;
+  doc["update_percentage"] = nullptr;  // resets HA's progress state
+  String payload;
+  serializeJson(doc, payload);
+  publish(Topic::kFirmwareInstalled, payload.c_str());
+}
+// Without the link, which HA keeps from the last state that had it: small
+// payloads, published from inside the flash routine.
+void MqttManager::publishFirmwareProgress(int percent) {
+  JsonDocument doc;
+  doc["installed_version"] = cfg::kSwVersion;
+  doc["in_progress"] = true;
+  doc["update_percentage"] = percent;
   String payload;
   serializeJson(doc, payload);
   publish(Topic::kFirmwareInstalled, payload.c_str());

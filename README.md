@@ -59,7 +59,7 @@ serves any number of them. Device name is just the friendly label shown in HA.
 | Alarm | switch | sit-stand reminder; tracks the desk's real state (the handset's blinking "=XX" display); off is sent as the 3 s hold the desk requires |
 | Cruise speed, Coast deceleration, Tap gain (up/down) | sensor | diagnostic, disabled by default; the learned motion model, for watching it converge (see [below](#height-seeking--self-calibration)) |
 | Reset calibration | button | wipe the learned motion model (see [below](#height-seeking--self-calibration)) |
-| Firmware | update | titled with the OTA channel and linked to its release page; Install downloads and flashes the latest, with a progress bar |
+| Firmware | update | titled with the OTA channel; while an update is available it links to a GitHub comparison with the installed version (otherwise to the channel's release page); Install downloads and flashes the latest, with a progress bar |
 | Check for updates | button | re-read the OTA channel's version now instead of waiting for the next poll |
 | Wi-Fi setup | button | reboot into the captive portal |
 | Restart | button | reboot the ESP |
@@ -168,6 +168,11 @@ esptool.py write_flash 0x0 firmware-esp32dev-full.bin
   firmware for a few seconds, so they wait until the desk has stopped moving. Pressing **Install** on the Firmware
   entity downloads and flashes its own board's `firmware-*.bin`
   (`cfg::kFirmwareAsset` - never the other board's, since that would brick it).
+- While the published version differs from the installed one, the Firmware
+  entity links to a GitHub comparison of the two commits - what installing
+  would add. After a force push that link can stop working once GitHub
+  prunes the old commit, except on the default branch, whose archive
+  releases keep every build's commit.
 - The build version (`-DFW_VERSION`) is the short commit SHA, so the running
   firmware's version always matches the commit it was built from.
 - `kOtaBaseUrl` is built from `FW_OTA_REPO` and `FW_OTA_CHANNEL`, which CI

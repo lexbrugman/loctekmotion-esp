@@ -3,6 +3,21 @@
 #include "Platform.h"
 #include "config.h"
 
+namespace {
+
+// A version that names a commit (a short SHA), as opposed to e.g. "dev" for
+// a local build.
+bool isCommit(const String& version) {
+  if (version.length() < 7) return false;
+  for (unsigned i = 0; i < version.length(); i++) {
+    const char c = version[i];
+    if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return false;
+  }
+  return true;
+}
+
+}  // namespace
+
 void HaState::loop() {
   publishSwitches();
   publishCalibration();
@@ -53,6 +68,7 @@ void HaState::onConnect() {
   if (movement_available_.republish(state)) mqtt_.publishMovementAvailable(state);
 
   if (latest_firmware_.length()) mqtt_.publishFirmwareLatest(latest_firmware_);
+  publishFirmware();
   mqtt_.publishWifi(WiFi.RSSI());
   last_telemetry_ = millis();
 }
@@ -72,6 +88,28 @@ void HaState::onTargetCommand() {
 void HaState::onLatestFirmware(const String& version) {
   latest_firmware_ = version;
   mqtt_.publishFirmwareLatest(version);
+  publishFirmware();
+}
+
+// A failed install (-1) puts the entity back in its idle state.
+void HaState::onUpdateProgress(int percent) {
+  if (percent < 0) publishFirmware();
+  else mqtt_.publishFirmwareProgress(percent);
+}
+
+void HaState::publishFirmware() {
+  mqtt_.publishFirmwareState(releaseUrl());
+}
+
+// While an update is available, a GitHub comparison of the installed and the
+// published commit; otherwise the channel's release page. A comparison needs
+// a commit at both ends, which a local "dev" build doesn't have.
+String HaState::releaseUrl() const {
+  if (latest_firmware_ != cfg::kSwVersion && isCommit(cfg::kSwVersion) &&
+      isCommit(latest_firmware_)) {
+    return String(cfg::kOtaCompareUrl) + cfg::kSwVersion + "..." + latest_firmware_;
+  }
+  return cfg::kOtaReleaseUrl;
 }
 
 bool HaState::requestAlarm(bool on) {

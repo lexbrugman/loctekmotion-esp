@@ -49,10 +49,12 @@ class MqttManager {
   // Version published on the OTA server, independent of whether it's
   // installed here — feeds the HA update entity's latest_version.
   void publishFirmwareLatest(const String& version);
-  // The Firmware entity's state: the installed version, plus install
-  // progress (0-100) while an update runs, or -1 when none is — which also
-  // resets a progress state an interrupted install left behind.
-  void publishFirmwareState(int percent = -1);
+  // The Firmware entity's state while no install runs: the installed version
+  // and the entity's link. Also resets a progress state an interrupted
+  // install left behind.
+  void publishFirmwareState(const String& url);
+  // Install progress (0-100) on the Firmware entity.
+  void publishFirmwareProgress(int percent);
   void publishWifi(int rssi);
   void publishLog(const String& message);
   void publishChildLock(bool locked);

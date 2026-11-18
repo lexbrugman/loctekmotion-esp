@@ -8,7 +8,8 @@
 
 // The state Home Assistant should be showing, and keeping it there: height
 // and slider, child lock / alarm / movement availability, calibration, the
-// published firmware version and Wi-Fi signal. Everything is published
+// Firmware entity (installed and published version, its link, install
+// progress) and Wi-Fi signal. Everything is published
 // retained and only on change, and sent again on every broker (re)connection
 // (onConnect) in case the broker lost it.
 //
@@ -30,7 +31,7 @@ class HaState {
   void onLatestFirmware(const String& version);
   // Install progress (see UpdateManager::ProgressFn), shown on the Firmware
   // entity.
-  void onUpdateProgress(int percent) { mqtt_.publishFirmwareState(percent); }
+  void onUpdateProgress(int percent);
   // The learned calibration changed outside a seek (it was reset).
   void onCalibrationChanged() { calibration_pending_ = true; }
 
@@ -45,6 +46,9 @@ class HaState {
   void publishSeekReport(const DeskController::SeekReport& r);
   void publishSwitches();
   void publishCalibration();
+  // The Firmware entity's state while no install runs.
+  void publishFirmware();
+  String releaseUrl() const;
 
   DeskController& desk_;
   MqttManager& mqtt_;

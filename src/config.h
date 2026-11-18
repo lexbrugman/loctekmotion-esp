@@ -89,11 +89,11 @@ inline constexpr float kTargetDeadband = 0.3f;     // "close enough" to target
 inline constexpr float kCoarseTargetDeadband = 0.5f;
 // Maximum wait for stability after stopping; fires early once height is stable
 // below kFineHeightLimit, and is the only exit at/above it (see
-// kStableDuration). Must comfortably exceed the longest real coast (~1.5 s from cruise speed):
-// if this fires mid-coast, the "settled" height truncates every coast
-// observation, the learned deceleration converges above its true value, and
-// seeks systematically overshoot instead of creeping up from the undershoot
-// side.
+// kStableDuration). Must comfortably exceed the longest real coast (~1.5 s
+// from cruise speed): if this fires mid-coast, the "settled" height truncates
+// every coast observation, the learned deceleration converges above its true
+// value, and seeks systematically overshoot instead of creeping up from the
+// undershoot side.
 inline constexpr uint32_t kSeekSettleDelay = 2000;
 // How long height must remain unchanged before the post-drive sample is taken.
 // Ensures we measure the desk's truly final position, not a mid-coast reading.
@@ -198,6 +198,9 @@ inline constexpr char kFirmwareAsset[] = "firmware-d1_mini.bin";
 inline constexpr char kFirmwareAsset[] = "firmware-esp32dev.bin";
 #endif
 inline constexpr char kVersionAsset[] = "version.txt";
+// Base of a GitHub comparison between two commits ("<installed>...<latest>"),
+// the Firmware entity's link while an update is available.
+inline constexpr char kOtaCompareUrl[] = "https://github.com/" FW_OTA_REPO "/compare/";
 inline constexpr uint32_t kUpdateCheckInterval = 6UL * 60UL * 60UL * 1000UL;  // 6h
 
 }  // namespace cfg
