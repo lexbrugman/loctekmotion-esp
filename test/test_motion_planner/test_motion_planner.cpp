@@ -938,6 +938,32 @@ void test_seek_waits_for_height_stability_before_sampling() {
   TEST_ASSERT_TRUE(p.moving());  // correction tap now running
 }
 
+void test_coarse_zone_settle_waits_out_the_full_delay() {
+  // Whole-centimetre readings can hold one value well past stable_duration
+  // while the desk is still coasting, so in the coarse zone only
+  // seek_settle_delay ends the settle.
+  Recorder rec;
+  DeskMotionPlanner p(kMin, kMax, kStabilitySettings, kTunables, std::ref(rec));
+
+  p.moveToHeight(115.0f, 1000, true, 105.0f);
+  p.tick(1200, true, 111.0f, kFresh);  // 111 + 4 >= 115 -> settling
+  TEST_ASSERT_FALSE(p.moving());
+
+  p.tick(1300, true, 113.0f, kFresh);
+  p.tick(1600, true, 113.0f, kFresh);  // unchanged for 300 ms (> stable_duration)
+  TEST_ASSERT_TRUE(p.seeking());       // ...but still settling
+
+  p.tick(1700, true, 114.0f, kFresh);  // the coast's last step
+  p.tick(1799, true, 114.0f, kFresh);
+  TEST_ASSERT_TRUE(p.seeking());
+
+  p.tick(1800, true, 114.0f, kFresh);  // seek_settle_delay after cut-off
+  TEST_ASSERT_FALSE(p.seeking());      // |114 - 115| <= 1.0 -> done
+  DeskMotionPlanner::SeekReport r{};
+  TEST_ASSERT_TRUE(p.takeSeekReport(r));
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, 114.0f, r.settled_height);
+}
+
 void test_completed_seek_yields_a_report_once() {
   Recorder rec;
   DeskMotionPlanner p(kMin, kMax, kSeekSettings, kTunables, std::ref(rec));
@@ -1052,6 +1078,7 @@ int main(int, char**) {
   RUN_TEST(test_seek_dead_reckons_between_height_reports);
   RUN_TEST(test_coarse_zone_widens_the_deadband);
   RUN_TEST(test_seek_waits_for_height_stability_before_sampling);
+  RUN_TEST(test_coarse_zone_settle_waits_out_the_full_delay);
   RUN_TEST(test_completed_seek_yields_a_report_once);
   RUN_TEST(test_aborted_seek_yields_no_report);
   RUN_TEST(test_set_learned_state_sanitizes_implausible_values);

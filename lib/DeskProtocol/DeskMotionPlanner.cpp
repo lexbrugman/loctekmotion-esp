@@ -270,7 +270,13 @@ void DeskMotionPlanner::serviceSeekSettling(uint32_t now, bool has_height, float
     settle_.stable_since = now;
   }
 
-  const bool stable = has_height && (now - settle_.stable_since) >= settings_.stable_duration;
+  // At/above the fine-resolution limit the display steps a whole centimetre
+  // at a time, so the slow tail of a coast can hold one reading far longer
+  // than stable_duration while the desk is still moving: only the full
+  // settle delay is trustworthy there.
+  const bool coarse = has_height && height >= settings_.fine_height_limit;
+  const bool stable = has_height && !coarse &&
+                      (now - settle_.stable_since) >= settings_.stable_duration;
   const bool timed_out = (now - settle_.started_at) >= settings_.seek_settle_delay;
   if (!stable && !timed_out) return;
   if (!has_height) { stop(); return; }

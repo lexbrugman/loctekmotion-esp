@@ -87,8 +87,9 @@ inline constexpr float kTargetDeadband = 0.3f;     // "close enough" to target
 // "Close enough" at/above kFineHeightLimit, where the display shows whole
 // centimetres: half that resolution (see DeskMotionPlanner::deadbandAt).
 inline constexpr float kCoarseTargetDeadband = 0.5f;
-// Maximum wait for stability after stopping; fires early once height is stable.
-// Must comfortably exceed the longest real coast (~1.5 s from cruise speed):
+// Maximum wait for stability after stopping; fires early once height is stable
+// below kFineHeightLimit, and is the only exit at/above it (see
+// kStableDuration). Must comfortably exceed the longest real coast (~1.5 s from cruise speed):
 // if this fires mid-coast, the "settled" height truncates every coast
 // observation, the learned deceleration converges above its true value, and
 // seeks systematically overshoot instead of creeping up from the undershoot
@@ -99,6 +100,8 @@ inline constexpr uint32_t kSeekSettleDelay = 2000;
 // At 0.1 cm display resolution, a creep slower than 0.5 cm/s produces steps
 // more than 200 ms apart, so this must be long enough not to mistake the slow
 // tail of a coast for stability; 350 ms tolerates creep down to ~0.3 cm/s.
+// Not used at/above kFineHeightLimit: whole-centimetre steps can sit still
+// for over a second mid-coast, so settling there waits out kSeekSettleDelay.
 inline constexpr uint32_t kStableDuration = 350;
 
 // --- Motion model (learned kinematics; see MotionModel) -----------------------

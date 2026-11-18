@@ -52,6 +52,7 @@ class DeskMotionPlanner {
                                             // readings are whole centimetres
     uint32_t seek_settle_delay = 0;         // max wait for stability; fires early once stable
     uint32_t stable_duration = 0;           // height unchanged this long before sampling
+                                            // (below fine_height_limit only)
     uint32_t correction_tap_max = 0;        // ceiling on a single correction tap drive (ms)
     uint32_t terminal_speed_drive_min = 0;  // drive must run this long for its stop speed
                                             // to count as a terminal-speed observation
