@@ -34,6 +34,8 @@ class MqttManager {
   // announced — the place to publish state the broker may no longer hold.
   using ConnectHandler = std::function<void()>;
 
+  // |config| is read on every reconnect, and the MQTT client keeps a pointer
+  // to its host, so it must outlive the manager.
   void begin(const DeviceConfig& config, CommandHandler handler);
   void onConnect(ConnectHandler handler) { connect_handler_ = std::move(handler); }
   // allow_reconnect = false keeps servicing a live connection but skips the
@@ -92,7 +94,7 @@ class MqttManager {
   PubSubClient mqtt_{net_};
   CommandHandler handler_;
   ConnectHandler connect_handler_;
-  DeviceConfig config_;
+  const DeviceConfig* config_ = nullptr;  // see begin()
   Countdown retry_;  // throttles reconnect attempts; unarmed until the first
   Countdown uptime_countdown_;
 

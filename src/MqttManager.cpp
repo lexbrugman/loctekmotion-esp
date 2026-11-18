@@ -45,12 +45,12 @@ constexpr const char* kTopicSuffixes[] = {
 }  // namespace
 
 void MqttManager::begin(const DeviceConfig& config, CommandHandler handler) {
-  config_ = config;
+  config_ = &config;
   handler_ = std::move(handler);
   g_self = this;
   // <kTopicNamespace>/<device id> — keyed off the provisioned identity so
   // each device gets its own MQTT namespace (see DeviceConfig::device_id).
-  const String base = String(cfg::kTopicNamespace) + "/" + config_.device_id;
+  const String base = String(cfg::kTopicNamespace) + "/" + config_->device_id;
   avail_top_ = base + "/status";
   cmd_prefix_ = base + "/cmd/";
   static_assert(sizeof(kTopicSuffixes) / sizeof(kTopicSuffixes[0]) ==
@@ -60,7 +60,7 @@ void MqttManager::begin(const DeviceConfig& config, CommandHandler handler) {
     topics_[i] = base + "/" + kTopicSuffixes[i];
   }
 
-  mqtt_.setServer(config_.mqtt_host, config_.mqtt_port);
+  mqtt_.setServer(config_->mqtt_host, config_->mqtt_port);
   mqtt_.setBufferSize(1024);  // discovery payloads exceed the 256 default
   mqtt_.setKeepAlive(30);
   mqtt_.setCallback([](char* topic, uint8_t* payload, unsigned int len) {
@@ -83,13 +83,13 @@ void MqttManager::loop(bool allow_reconnect) {
 
 bool MqttManager::reconnect() {
   if (WiFi.status() != WL_CONNECTED) return false;
-  if (!config_.hasBroker()) return false;  // not provisioned yet
+  if (!config_->hasBroker()) return false;  // not provisioned yet
 
-  const char* user = config_.mqtt_user[0] ? config_.mqtt_user : nullptr;
-  const char* pass = config_.mqtt_pass[0] ? config_.mqtt_pass : nullptr;
+  const char* user = config_->mqtt_user[0] ? config_->mqtt_user : nullptr;
+  const char* pass = config_->mqtt_pass[0] ? config_->mqtt_pass : nullptr;
 
   // Last Will: broker marks us offline if we drop unexpectedly.
-  const bool ok = mqtt_.connect(config_.device_id, user, pass, avail_top_.c_str(),
+  const bool ok = mqtt_.connect(config_->device_id, user, pass, avail_top_.c_str(),
                                 0, true, "offline");
   if (ok) announce();
   return ok;
@@ -230,7 +230,7 @@ void MqttManager::announce() {
   // After every publishDiscoveryEntity() above: subscribing replays all
   // retained configs under this node ID, and onDiscoveryMessage() deletes
   // the ones for entities this firmware doesn't define.
-  mqtt_.subscribe((String(cfg::kDiscoveryPrefix) + "/+/" + config_.device_id +
+  mqtt_.subscribe((String(cfg::kDiscoveryPrefix) + "/+/" + config_->device_id +
                    "/+/config").c_str());
   // HA's birth message, see onDiscoveryMessage().
   mqtt_.subscribe((String(cfg::kDiscoveryPrefix) + "/status").c_str());
@@ -244,7 +244,7 @@ void MqttManager::publishDiscoveryEntity(const char* component, const char* obje
                                          const char* name, JsonDocument& doc,
                                          const String& extra_availability_topic) {
   String topic = String(cfg::kDiscoveryPrefix) + "/" + component + "/" +
-                 config_.device_id + "/" + object + "/config";
+                 config_->device_id + "/" + object + "/config";
 
   // name == nullptr -> "name":null, so this entity (the device's primary
   // feature) takes the device's own name in the UI instead of its own.
@@ -253,7 +253,7 @@ void MqttManager::publishDiscoveryEntity(const char* component, const char* obje
   } else {
     doc["name"] = nullptr;
   }
-  doc["unique_id"] = String(String(config_.device_id) + "_" + object);
+  doc["unique_id"] = String(String(config_->device_id) + "_" + object);
   if (extra_availability_topic.length()) {
     // Available only while both the device overall and (e.g.) movement
     // commands are.
@@ -269,8 +269,8 @@ void MqttManager::publishDiscoveryEntity(const char* component, const char* obje
   // device. id/name come from the provisioned identity (see DeviceConfig) so
   // multiple devices on the same broker each get their own HA device entry.
   JsonObject device = doc["device"].to<JsonObject>();
-  device["identifiers"].to<JsonArray>().add(config_.device_id);
-  device["name"] = config_.device_name;
+  device["identifiers"].to<JsonArray>().add(config_->device_id);
+  device["name"] = config_->device_name;
   device["manufacturer"] = cfg::kManufacturer;
   device["model"] = cfg::kModel;
   device["sw_version"] = cfg::kSwVersion;
@@ -322,7 +322,7 @@ void MqttManager::onDiscoveryMessage(const String& subtopic, const uint8_t* payl
   const int config_start = subtopic.indexOf('/', object_start);
   if (node_start <= 0 || object_start <= 0 || config_start < 0) return;
   if (subtopic.substring(config_start) != "/config") return;
-  if (subtopic.substring(node_start, object_start - 1) != config_.device_id) return;
+  if (subtopic.substring(node_start, object_start - 1) != config_->device_id) return;
 
   const String component = subtopic.substring(0, node_start - 1);
   const String object = subtopic.substring(object_start, config_start);
