@@ -1,9 +1,10 @@
 name: Cleanup
 
 # firmware.yml creates per-branch releases ("<branch>-latest" OTA channels and
-# "<branch>-<timestamp>-<sha>" archives). "delete" prunes a branch's releases
-# when the branch is deleted; "release" removes the tag GitHub leaves behind
-# when a release is deleted by hand. Deletions made here run under
+# "<branch>-<timestamp>-<sha>" archives; scripts/publish_release.sh defines
+# both formats). "delete" prunes a branch's releases when the branch is
+# deleted; "release" removes the tag GitHub leaves behind when a release is
+# deleted by hand. Deletions made here run under
 # GITHUB_TOKEN, which never triggers other runs, so the jobs can't overlap.
 # Both triggers only fire from the workflow file on the default branch.
 on:

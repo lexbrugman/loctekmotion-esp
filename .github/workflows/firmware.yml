@@ -93,6 +93,8 @@ jobs:
       contents: write
     env:
       GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.build.outputs.version }}
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
     steps:
       - uses: actions/checkout@v7
 
@@ -103,29 +105,9 @@ jobs:
           path: dist
           merge-multiple: true
 
-      # The branch's OTA channel, updated in place (see the script).
       - name: Publish "<branch>-latest" release
-        env:
-          VERSION: ${{ needs.build.outputs.version }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-        run: scripts/publish_channel.sh
+        run: scripts/publish_release.sh channel
 
-      # The default branch also keeps one untouched release per build — the
-      # record of firmware production devices may have run. Tagged
-      # "<branch>-<UTC commit date>-<sha>": unique, sorted chronologically on
-      # the releases page (which orders by name), below the rolling "-latest"
-      # tag. cleanup.yml parses this format — keep the two in sync.
-      # --latest=false keeps the "Latest" badge on the OTA channel.
       - name: Archive this build's release
         if: github.ref_name == github.event.repository.default_branch
-        run: |
-          stamp="$(TZ=UTC git show -s --format=%cd --date=format-local:%Y%m%d-%H%M%S "$GITHUB_SHA")"
-          tag="${GITHUB_REF_NAME//\//-}-$stamp-${{ needs.build.outputs.version }}"
-          # A re-run for the same commit replaces its own archive.
-          gh release delete "$tag" --yes --cleanup-tag --repo "$GITHUB_REPOSITORY" || true
-          gh release create "$tag" dist/*.bin dist/version.txt \
-            --repo "$GITHUB_REPOSITORY" \
-            --target "$GITHUB_SHA" \
-            --title "$tag (build history)" \
-            --notes "Archived build for branch \`$GITHUB_REF_NAME\` — commit ${GITHUB_SHA:0:7} (version ${{ needs.build.outputs.version }}). Not an OTA channel; devices don't poll this." \
-            --latest=false
+        run: scripts/publish_release.sh archive
